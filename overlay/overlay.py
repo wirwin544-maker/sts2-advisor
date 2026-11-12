@@ -102,13 +102,22 @@ def format_combat(status: dict, plan: dict) -> str:
             f"BLOCK {status.get('block', '?')}  "
             f"ENERGY {status.get('energy', '?')}/{status.get('max_energy', '?')}\n")
     enemies = []
-    for e in status.get('enemies') or []:
-        intents = ', '.join(str(i.get('label') or i.get('type') or '')
-                            for i in e.get('intents') or [])
-        enemies.append(f"{e.get('name', '?')} {e.get('hp', '?')} HP"
+    for i, e in enumerate(status.get('enemies') or [], 1):
+        intents = ', '.join(str(intent.get('label') or intent.get('type') or '')
+                            for intent in e.get('intents') or [])
+        enemies.append(f"Enemy {e.get('number', i)}: {e.get('name', '?')} "
+                       f"({e.get('hp', '?')} HP)"
                        + (f" ({intents})" if intents else ''))
     if enemies:
         head += '\nENEMIES: ' + ' | '.join(enemies) + '\n'
+    orb_state = status.get('orbs') or {}
+    if orb_state.get('left_to_right'):
+        orb_display = [f"{o.get('name', '?')} ({o.get('evoke_val', '?')} evoke)"
+                       for o in orb_state['left_to_right']]
+        head += '\nORBS LEFT → RIGHT: ' + ' | '.join(orb_display) + '\n'
+        next_orb = orb_state.get('next_to_evoke') or {}
+        head += ('NEXT EVOKE: rightmost ' + str(next_orb.get('name') or '?')
+                 + ' (Dualcast hits this orb twice)\n')
     if status.get('reference_total'):
         head += (f"REFERENCE: {status.get('reference_matched', 0)}/"
                  f"{status['reference_total']} monsters matched "
@@ -130,12 +139,17 @@ def format_combat(status: dict, plan: dict) -> str:
     for i, step in enumerate(steps):
         action = step.get('action')
         if action in ('play_card', 'select_card'):
-            name = f"[{step.get('card_index')}] {step.get('name', 'Card')}"
+            card_no = step.get('display_card_number')
+            if not isinstance(card_no, int):
+                idx = step.get('card_index')
+                card_no = idx + 1 if type(idx) is int else '?'
+            name = f"Card {card_no}: {step.get('name', 'Card')}"
         elif action == 'use_potion':
             name = f"Potion slot {step.get('slot')}: {step.get('name', 'Potion')}"
         else:
             name = 'End turn'
-        target = f" -> {step['target']}" if step.get('target') else ''
+        # Never show the engine's zero-based _0 entity IDs to the player.
+        target = f" -> {step['target_label']}" if step.get('target_label') else ''
         prefix = 'NOW' if i == 0 else f'if still valid, {i + 1}'
         lines.append(f"{prefix}. {name}{target}")
         if i == 0 and step.get('reason'):

@@ -66,6 +66,38 @@ def patch_source(source: str) -> tuple[str, int]:
     return result, int(normal) + int(fake)
 
 
+def migrate_legacy_backups(source_root: Path, backup_root: Path) -> Path | None:
+    """Relocate the old in-project backup tree so the SDK cannot compile it.
+
+    Avoid modifying unrelated source files. A legacy backup folder is moved in
+    its entirety to a sibling path, with a collision-safe suffix.
+    """
+    old = source_root / 'backups'
+    if not old.exists():
+        return None
+    backup_root.mkdir(parents=True, exist_ok=True)
+    dest = backup_root / 'legacy-in-project-backups'
+    suffix = 1
+    while dest.exists():
+        dest = backup_root / f'legacy-in-project-backups-{suffix}'
+        suffix += 1
+    shutil.move(str(old), str(dest))
+    print(f'Relocated old in-project backups to: {dest}')
+    return dest
+
+
+def assert_single_state_builder(source_root: Path) -> None:
+    """Refuse to build if another StateBuilder.cs source is still in compile glob."""
+    original = (source_root / 'McpMod.StateBuilder.cs').resolve()
+    duplicates = [p for p in source_root.rglob('McpMod.StateBuilder.cs')
+                  if p.resolve() != original and not any(
+                      segment in ('bin', 'obj', '.git') for segment in p.parts)]
+    if duplicates:
+        raise RuntimeError('Additional duplicate C# source found; move it outside '
+                           f'{source_root} before compiling: ' +
+                           ', '.join(str(p) for p in duplicates))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, default=Path.home() / 'STS2MCP-v107',
@@ -106,10 +138,15 @@ def main(argv: list[str] | None = None) -> int:
     if os.name != 'nt':
         parser.error('Building and installing the mod requires Windows. Use --dry-run elsewhere.')
 
-    # Preserve source and installed DLL before any changes, in a timestamped
-    # directory outside the game mods folder. Runtime/save data is untouched.
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-UTC')
-    backup = source_root / 'backups' / f'shop-readonly-{stamp}'
+    # .NET's default recursive Compile glob includes all *.cs below source_root.
+    # Prior installer versions accidentally stored McpMod.StateBuilder.cs in
+    # source_root/backups, causing CS0111 duplicates. Relocate legacy backups
+    # before compilation and put all new backups OUTSIDE the project tree.
+    backup_root = source_root.parent / f'{source_root.name}-backups'
+    migrate_legacy_backups(source_root, backup_root)
+    assert_single_state_builder(source_root)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f-UTC')
+    backup = backup_root / f'shop-readonly-{stamp}'
     backup.mkdir(parents=True, exist_ok=False)
     shutil.copy2(source_file, backup / source_file.name)
     shutil.copy2(mod_dll, backup / mod_dll.name)

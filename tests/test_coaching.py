@@ -57,14 +57,83 @@ class CombatTests(unittest.TestCase):
         self.assertFalse(plan['steps'][0]['tentative'])
         self.assertTrue(plan['steps'][1]['tentative'])
         status = {**combat.summary(state, sig, 'run-one'), 'status': 'active'}
-        self.assertIn('NOW. [0] Bash', format_combat(status, plan))
+        self.assertIn('NOW. Card 1: Bash -> Enemy 1: Jaw Worm (44 HP)', format_combat(status, plan))
         state['player']['hand'].pop(0)
         state['player']['energy'] = 1
         next_sig = combat.digest(state)
         self.assertNotEqual(sig, next_sig)
         status = {**combat.summary(state, next_sig, 'run-one'), 'status': 'active'}
         self.assertIn('Updating play order', format_combat(status, plan))
-        self.assertNotIn('NOW. [0] Bash', format_combat(status, plan))
+        self.assertNotIn('NOW. Card 1: Bash', format_combat(status, plan))
+
+    def test_targets_are_one_based_without_touching_machine_ids(self):
+        state = game_state()
+        state['battle']['enemies'] = [
+            {'entity_id': 'WRIGGLER_0', 'name': 'Wriggler', 'hp': 18, 'intents': []},
+            {'entity_id': 'WRIGGLER_1', 'name': 'Wriggler', 'hp': 6, 'intents': []},
+        ]
+        sig = combat.digest(state)
+        resp = json.dumps({'steps': [{'action':'play_card', 'card_index':0,
+                                     'card_id':'BASH', 'target':'WRIGGLER_1'}]})
+        plan = combat.validate_response(resp, state, sig, 'r')
+        self.assertEqual(plan['steps'][0]['target'], 'WRIGGLER_1')
+        self.assertEqual(plan['steps'][0]['target_label'], 'Enemy 2: Wriggler (6 HP)')
+        status = {**combat.summary(state, sig, 'r'), 'status':'active'}
+        output = format_combat(status, plan)
+        self.assertIn('Enemy 1: Wriggler (18 HP)', output)
+        self.assertIn('Enemy 2: Wriggler (6 HP)', output)
+        self.assertNotIn('WRIGGLER_0', output)
+        self.assertNotIn('WRIGGLER_1', output)
+
+    def test_invalid_dualcast_orb_prediction_is_rejected(self):
+        state = game_state()
+        state['player']['orbs'] = [
+            {'name':'Frost', 'id':'FROST', 'evoke_val':5},
+            {'name':'Dark', 'id':'DARK', 'evoke_val':18},
+        ]
+        state['player']['hand'][0].update({'id':'DUALCAST', 'name':'Dualcast',
+                                           'target_type':'Self'})
+        sig = combat.digest(state)
+        wrong = {'steps':[{'action':'play_card','card_index':0,'card_id':'DUALCAST',
+                           'orb_evoked_id':'DARK'}]}
+        self.assertEqual('unavailable', combat.validate_response(json.dumps(wrong),state,sig,'r')['status'])
+        correct = {'steps':[{'action':'play_card','card_index':0,'card_id':'DUALCAST',
+                             'orb_evoked_id':'FROST'}]}
+        self.assertEqual('ready',combat.validate_response(json.dumps(correct),state,sig,'r')['status'])
+
+    def test_raw_engine_ids_are_removed_from_explanations(self):
+        state = game_state()
+        sig = combat.digest(state)
+        reply = {'steps':[{'action':'play_card','card_index':0,'card_id':'BASH',
+                           'target':'JAW_WORM_0', 'reason':'Focus JAW_WORM_0'}],
+                 'why':'Kill JAW_WORM_0 first', 'risk':'JAW_WORM_0 attacks'}
+        plan = combat.validate_response(json.dumps(reply), state, sig, 'r')
+        self.assertEqual('ready',plan['status'])
+        status = {**combat.summary(state, sig, 'r'), 'status':'active'}
+        shown = format_combat(status, plan)
+        self.assertNotIn('JAW_WORM_0', shown)
+        self.assertIn('Enemy 1: Jaw Worm (44 HP)', shown)
+
+    def test_defect_orb_order_and_evoke_are_explicit(self):
+        state = game_state()
+        # API queue is oldest/rightmost FIRST. Display is reversed.
+        state['player']['orbs'] = [
+            {'name':'Frost', 'id':'FROST', 'evoke_val':5},
+            {'name':'Frost', 'id':'FROST', 'evoke_val':5},
+            {'name':'Dark', 'id':'DARK', 'evoke_val':18},
+        ]
+        state['player']['hand'][0].update({'name':'Dualcast','id':'DUALCAST',
+                                           'target_type':'Self'})
+        orbs = combat.display_orbs(state['player']['orbs'])
+        self.assertEqual([o['name'] for o in orbs['left_to_right']], ['Dark','Frost','Frost'])
+        self.assertEqual(orbs['next_to_evoke']['name'], 'Frost')
+        self.assertIn('RIGHTMOST orb', combat.prompt(state, '', '', ''))
+        self.assertIn('"name": "Frost"', combat.prompt(state, '', '', ''))
+        sig = combat.digest(state)
+        status = {**combat.summary(state, sig, 'r'), 'status':'active'}
+        out = format_combat(status, {'status':'unavailable','warning':'No plan'})
+        self.assertIn('ORBS LEFT → RIGHT: Dark (18 evoke) | Frost (5 evoke) | Frost (5 evoke)',out)
+        self.assertIn('NEXT EVOKE: rightmost Frost',out)
 
     def test_rejects_invalid_target_and_card(self):
         state = game_state()

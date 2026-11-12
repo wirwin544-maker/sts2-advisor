@@ -1,6 +1,8 @@
 """Pure-source safety checks (no Windows, game or API required)."""
 import unittest
-from tools.fix_sts2mcp_shop import patch_source, PatchMismatch
+import tempfile
+from pathlib import Path
+from tools.fix_sts2mcp_shop import patch_source, PatchMismatch, migrate_legacy_backups, assert_single_state_builder
 
 NORMAL = '''        else if (currentRoom is MerchantRoom merchantRoom)
         {
@@ -60,6 +62,28 @@ class FixShopTests(unittest.TestCase):
     def test_rejects_unrecognized_source(self):
         with self.assertRaises(PatchMismatch):
             patch_source('class Unknown {}')
+
+    def test_previous_backup_is_migrated_outside_build(self):
+        with tempfile.TemporaryDirectory() as td:
+            source_root = Path(td) / 'STS2MCP-v107'
+            backup_root = Path(td) / 'STS2MCP-v107-backups'
+            old = source_root / 'backups' / 'shop-readonly-old'
+            old.mkdir(parents=True)
+            (source_root / 'McpMod.StateBuilder.cs').write_text('real source')
+            (old / 'McpMod.StateBuilder.cs').write_text('old copy')
+            moved = migrate_legacy_backups(source_root, backup_root)
+            self.assertTrue((moved / 'shop-readonly-old' / 'McpMod.StateBuilder.cs').is_file())
+            self.assertFalse((source_root / 'backups').exists())
+            assert_single_state_builder(source_root)
+
+    def test_unexpected_duplicate_file_blocks_build(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / 'McpMod.StateBuilder.cs').write_text('real')
+            (root / 'other').mkdir()
+            (root / 'other' / 'McpMod.StateBuilder.cs').write_text('duplicate')
+            with self.assertRaisesRegex(RuntimeError, 'duplicate C# source'):
+                assert_single_state_builder(root)
 
     def test_crlf_supported(self):
         source = (NORMAL + FAKE).replace('\n', '\r\n')
