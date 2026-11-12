@@ -4,6 +4,9 @@
 # =============================================================================
 
 bridge:
+  # Prevent two Oracle bridge processes from polling and writing the same
+  # runtime files (e.g. start.bat plus Windows autostart).
+  instance_port: 15581
   # STS2MCP exposes its REST API here. Port is set in STS2_MCP.conf in the mod
   # folder (default 15526). The advisor ONLY issues GET reads — never POST.
   base_url: "http://127.0.0.1:15526"
@@ -107,6 +110,9 @@ paths:
   reference_cache_file: "data/reference_cache.json" # All imported spreadsheet worksheets
 
 combat:
+  # Require three matching 0.3s orb samples before trusting a changed queue.
+  # Pauses orb-dependent advice while channel/evoke animations settle.
+  orb_confirmation_polls: 3
   enabled: true
   settle_s: 0.65                    # wait for animations/state to settle
   min_request_interval_s: 4.0     # Claude Pro usage protection, seconds

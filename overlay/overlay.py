@@ -111,7 +111,10 @@ def format_combat(status: dict, plan: dict) -> str:
     if enemies:
         head += '\nENEMIES: ' + ' | '.join(enemies) + '\n'
     orb_state = status.get('orbs') or {}
-    if orb_state.get('left_to_right'):
+    orb_verified = status.get('orb_read_stable') is not False
+    if not orb_verified:
+        head += '\nORB STATE UNVERIFIED: waiting for matching readings. Do not follow an old orb play order.\n'
+    elif orb_state.get('left_to_right'):
         orb_display = [f"{o.get('name', '?')} ({o.get('evoke_val', '?')} evoke)"
                        for o in orb_state['left_to_right']]
         head += '\nORBS LEFT → RIGHT: ' + ' | '.join(orb_display) + '\n'
@@ -125,6 +128,8 @@ def format_combat(status: dict, plan: dict) -> str:
     if status.get('selection'):
         head += '\nSELECTION: ' + str(status['selection']) + '\n'
     if status.get('status') == 'waiting':
+        if not orb_verified:
+            return head + '\nCombat recommendations are suspended until the orb queue settles.'
         return head + '\nWaiting for player turn / combat selection to resolve.'
     if status.get('status') == 'limit':
         return head + '\nCombat advice limit reached for this fight. Configure combat.max_requests_per_fight to raise it.'
@@ -331,10 +336,14 @@ class Overlay:
             return False
 
     def _set_text(self, content: str) -> None:
+        # Keep the reader's scroll position when text changes during polling.
+        # Tk's delete + insert otherwise snaps back to the top on every tick.
+        scroll_position = self.text.yview()[0]
         self.text.configure(state='normal')
         self.text.delete('1.0', 'end')
         self.text.insert('1.0', content)
         self.text.configure(state='disabled')
+        self.text.yview_moveto(scroll_position)
 
     def _update_build_suggestion(self):
         """Poll a correlated response without freezing Tk or displaying stale jobs."""
@@ -610,7 +619,8 @@ class Overlay:
                 self._shown_build_runs.add(run_id)
                 self.root.after(100, self._build_picker)
             status = read_json(self.combat_status_path)
-            if status.get('status') == 'active' and status.get('run_id') == run_id:
+            if (status.get('status') in ('active', 'waiting', 'limit') and
+                    status.get('run_id') == run_id):
                 content = format_combat(status, read_json(self.combat_plan_path))
             else:
                 try:

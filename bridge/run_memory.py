@@ -7,6 +7,8 @@ logical run continuity, not a promise of a single native Claude chat session.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -32,10 +34,32 @@ def candidates(character: str) -> list[str]:
 
 
 def atomic_json(path: Path, value: dict) -> None:
+    """Atomically replace JSON without sharing a predictable temporary filename.
+
+    A fixed ``active_run.json.tmp`` name collided when multiple bridge instances
+    or OneDrive briefly held it open. ``mkstemp`` uses a unique name in the same
+    folder, so os.replace stays on the same filesystem. Windows/OneDrive may
+    transiently lock the destination as well; retry only that specific failure.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + '.tmp')
-    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding='utf-8')
-    temporary.replace(path)
+    payload = json.dumps(value, indent=2, ensure_ascii=False)
+    fd, tmp_name = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(payload)
+        for attempt in range(5):
+            try:
+                os.replace(tmp_name, path)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(min(0.04 * (attempt + 1), 0.16))
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
 
 def read_json(path: Path) -> dict:
@@ -181,16 +205,19 @@ class RunJournal:
         selection = str(choice.get('build', ''))
         current = build_catalog.normalize_character(self.active.get('character'))
         requested = build_catalog.normalize_character(choice.get('character'))
+        character_changed = False
         # Manual character selection is allowed only while MCP cannot tell us.
         if current == 'Unknown' and requested != 'Unknown':
             self.active['character'] = requested
             self.active['character_source'] = 'manual'
             current = requested
+            character_changed = True
         allowed = set(candidates(current)) | set(LEGACY_NAMES.get(current.lower(), ()))
         if selection not in allowed:
             return False
         if selection == self.build:
-            self._save_active()  # persists any newly resolved character
+            if character_changed:
+                self._save_active()  # save manual character once, not every poll
             return False
         self.active['build'] = selection
         self._save_active()

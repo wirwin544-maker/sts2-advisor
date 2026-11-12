@@ -13,6 +13,7 @@ import json
 import time
 
 from . import client as client_mod
+from .single_instance import claim_instance
 from . import combat, control, grounding, screens, signature, thesis, util, worker
 from .monster_reference import MonsterReference
 from .reference_search import ReferenceLibrary
@@ -181,13 +182,16 @@ class DeckTracker:
         new_cards = [{"name": n, "is_upgraded": u, "count": ct}
                      for (n, u), ct in sorted(counts.items())]
         floor = (state.get("run") or {}).get("floor")
+        old_floor = self._floor
+        old_source = self._source
         self._floor = floor if isinstance(floor, int) else self._floor
         how = "turn 1" if clean else "approx (mid-combat)"
         src = f"observed in combat {how} (floor {floor}, {total} cards)"
         changed = new_cards != self._cards
         self._cards = new_cards
         self._source = src
-        self._save()
+        if changed or self._floor != old_floor or self._source != old_source:
+            self._save()
         if changed:
             self._logger.info("Deck updated %s: %d cards (floor %s).", how, total, floor)
 
@@ -248,6 +252,12 @@ def _game_over_message(state: dict) -> str:
 
 def main() -> None:
     cfg = util.load_config()
+    # Avoid two bridge loops issuing duplicate Claude requests and writing the
+    # same runtime files when autostart and start.bat are both enabled.
+    instance_guard = claim_instance(int(cfg.get('bridge', {}).get('instance_port', 15581)))
+    if instance_guard is None:
+        print('Spire Oracle bridge is already running; declining duplicate start.')
+        return
     logger = util.setup_logging(cfg["paths"]["log_file"])
     logger.info("StS2 Advisor starting.")
 
@@ -301,6 +311,8 @@ def main() -> None:
     log_prompts = cfg["dev"].get("log_prompts", False)
     game_over_handled = False
     combat_debounce = signature.Debouncer(cfg.get("combat", {}).get("settle_s", 0.65))
+    orb_stabilizer = combat.OrbStabilizer(
+        cfg.get('combat', {}).get('orb_confirmation_polls', 3))
     combat_enabled = bool(cfg.get("combat", {}).get("enabled", True))
     combat_interval = float(cfg.get("combat", {}).get("min_request_interval_s", 3.0))
     combat_max = int(cfg.get("combat", {}).get("max_requests_per_fight", 30))
@@ -351,6 +363,7 @@ def main() -> None:
                     model.reset_sessions()
                     debouncer.reset()
                     combat_debounce.reset()
+                    orb_stabilizer.reset()
                     adv_worker.invalidate(None)
                     current_fight = None
                     combat_requests = 0
@@ -483,27 +496,40 @@ def main() -> None:
                     if current_fight is None or current_fight[:3] != fight_key[:3]:
                         current_fight = fight_key
                         combat_requests = 0
+                        orb_stabilizer.reset()
                         found = reference.encounter(state)
                         logger.info('Encounter reference: %d/%d enemies matched (sheet v%s): %s',
                                     sum(f['reference'] is not None for f in found),
                                     len(found), reference.source_version,
                                     ', '.join(str(f['live_name']) for f in found))
-                    if last_state_sig != sig:
+                    # Stabilize the orb queue independently of the rest of the
+                    # battle. Never ask Claude to act on one disputed orb read.
+                    orb_verified = orb_stabilizer.observe((state.get('player') or {}).get('orbs'))
+                    verified_state = orb_stabilizer.stable_state(state)
+                    sig = 'combat:' + combat.digest(verified_state)
+                    if last_state_sig != sig or not orb_verified:
                         adv_worker.invalidate(sig)
                         last_state_sig = sig
+                    if not orb_verified:
+                        # Invalidate any prior advice immediately, including if
+                        # an oscillating orb queue returns the same digest.
+                        adv_worker.invalidate(None)
+                        last_state_sig = None
+                        combat_debounce.reset()
                     can_advise = combat.active(state)
                     combat_limit = combat_requests >= combat_max
                     found = reference.encounter(state)
                     atomic_json(combat_status_path, {
-                        **combat.summary(state, sig, journal.run_id),
+                        **combat.summary(verified_state, sig, journal.run_id),
+                        'orb_read_stable': orb_verified,
                         'reference_matched': sum(f['reference'] is not None for f in found),
                         'reference_total': len(found),
                         'reference_version': reference.source_version,
-                        "status": "waiting" if not can_advise else
+                        "status": "waiting" if not orb_verified or not can_advise else
                                   "limit" if combat_limit else "active",
                         "remaining_requests": max(0, combat_max - combat_requests),
                     })
-                    if not can_advise or combat_limit:
+                    if not orb_verified or not can_advise or combat_limit:
                         time.sleep(poll)
                         continue
                     combat_debounce.observe(sig)
@@ -512,11 +538,11 @@ def main() -> None:
                             now - last_combat_call >= combat_interval and
                             combat_requests < combat_max):
                         payload = combat.prompt(
-                            state, thesis_store.format_for_prompt(),
+                            verified_state, thesis_store.format_for_prompt(),
                             journal.format_for_prompt(4, 1200), journal.build,
                             reference_text=reference.prompt_for_battle(state))
                         adv_worker.request(sig, payload, model.model_for("combat"),
-                                           "combat", run_id=journal.run_id, state=state)
+                                           "combat", run_id=journal.run_id, state=verified_state)
                         combat_debounce.mark_fired(sig)
                         last_combat_call = now
                         combat_requests += 1
@@ -524,6 +550,7 @@ def main() -> None:
                     continue
                 atomic_json(combat_status_path, {"status": "inactive", "run_id": journal.run_id})
                 current_fight = None
+                orb_stabilizer.reset()
                 combat_requests = 0
                 combat_debounce.reset()
 
@@ -559,6 +586,14 @@ def main() -> None:
                     logger.info("Firing advice: %s (model=%s, sig=%s)", kind, alias, sig)
                     adv_worker.request(sig, payload, alias, kind, run_id=journal.run_id)
                     debouncer.mark_fired(sig)
+            except PermissionError as exc:
+                # OneDrive/AV can briefly hold the run-journal path. Do not
+                # replace valid advice with a generic error for a recoverable
+                # Windows file-lock failure. The next poll retries the save.
+                logger.warning('Temporary runtime file access failure; retrying: %s', exc)
+                adv_worker.invalidate(None)
+                combat_debounce.reset()
+                last_state_sig = None
             except Exception:  # noqa: BLE001 - keep the advisor alive on any bad state
                 logger.exception("Error processing state (state_type=%s)",
                                  state.get("state_type"))
@@ -575,6 +610,7 @@ def main() -> None:
     finally:
         adv_worker.stop()
         model.shutdown()
+        instance_guard.close()
         try:
             heartbeat_path.unlink()  # signal overlay to close
         except OSError:

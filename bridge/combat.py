@@ -9,9 +9,73 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from .run_memory import atomic_json
 
 COMBAT_KINDS = {'monster', 'elite', 'boss', 'hand_select'}
+
+
+class OrbStabilizer:
+    """Confirm successive orb readings before changing player-facing advice.
+
+    A partial read during card animations can briefly report a different queue.
+    The advisor must not treat one such sample as a valid new Dualcast target.
+    A snapshot is accepted after ``required`` consecutive matching samples.
+    """
+
+    def __init__(self, required: int = 3):
+        self.required = max(2, int(required))
+        self.reset()
+
+    def reset(self) -> None:
+        self.confirmed: list[dict] = []
+        self._confirmed_key: str | None = None
+        self._candidate_key: str | None = None
+        self._count = 0
+
+    @staticmethod
+    def _key(orbs: list[dict]) -> str:
+        # Do not include display descriptions or transient hover-text values.
+        canonical = [{k: orb.get(k) for k in ('id', 'name', 'passive_val', 'evoke_val')}
+                     for orb in orbs if isinstance(orb, dict)]
+        return json.dumps(canonical, sort_keys=True, ensure_ascii=False, default=str)
+
+    def observe(self, raw_orbs: object) -> bool:
+        """Return True only when the current queue matches a confirmed reading.
+
+        Absence of an ``orbs`` field after observing orbs is NOT evidence that
+        they vanished; the state reader may have omitted an incomplete field.
+        """
+        if not isinstance(raw_orbs, list):
+            if self._confirmed_key is not None and self.confirmed:
+                self._candidate_key = None
+                self._count = 0
+                return False
+            raw_orbs = []
+        raw_orbs = [o for o in raw_orbs if isinstance(o, dict)]
+        key = self._key(raw_orbs)
+        if key == self._confirmed_key:
+            self._candidate_key = None
+            self._count = 0
+            return True
+        if key == self._candidate_key:
+            self._count += 1
+        else:
+            self._candidate_key = key
+            self._count = 1
+        if self._count < self.required:
+            return False
+        self.confirmed = deepcopy(raw_orbs)
+        self._confirmed_key = key
+        self._candidate_key = None
+        self._count = 0
+        return True
+
+    def stable_state(self, state: dict) -> dict:
+        """A copy with verified orbs, never the unconfirmed raw API reading."""
+        copy = dict(state)
+        copy['player'] = {**(state.get('player') or {}), 'orbs': deepcopy(self.confirmed)}
+        return copy
 
 
 def active(state: dict) -> bool:
