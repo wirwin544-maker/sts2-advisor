@@ -164,12 +164,16 @@ class ModelClient:
         mode = cli.get("system_prompt_mode", "append")
         self._sys_flag = "--system-prompt" if mode == "replace" else "--append-system-prompt"
         self.system_prompt = _build_system_prompt(cfg["paths"]["prompts_dir"])
+        self._special_prompts = {}
+        for mode in ("combat", "build"):
+            special = util.resolve(cfg["paths"]["prompts_dir"]) / f"{mode}_prompt.md"
+            self._special_prompts[mode] = special.read_text(encoding="utf-8") if special.exists() else self.system_prompt
 
         self.env = _clean_env(os.environ)
         for k, v in (cli.get("env") or {}).items():
             self.env[str(k)] = str(v)
 
-        self._sessions: dict[str, _WarmSession] = {}
+        self._sessions: dict[tuple[str, str], _WarmSession] = {}
         self._lock = threading.Lock()
 
     # --- model routing ----------------------------------------------------
@@ -178,51 +182,52 @@ class ModelClient:
             screen_kind, self.model_cfg.get("default", "sonnet"))
 
     # --- command construction --------------------------------------------
-    def _sys_flags(self) -> list[str]:
-        return [self._sys_flag, self.system_prompt] if self.system_prompt else []
+    def _sys_flags(self, mode: str = "strategy") -> list[str]:
+        prompt = self._special_prompts.get(mode, self.system_prompt)
+        return [self._sys_flag, prompt] if prompt else []
 
-    def _warm_cmd(self, alias: str) -> list[str]:
+    def _warm_cmd(self, alias: str, mode: str = "strategy") -> list[str]:
         return ([self.executable] + self.base_flags + self.warm_flags
-                + ["--model", alias] + self._sys_flags())
+                + ["--model", alias] + self._sys_flags(mode))
 
-    def _oneshot_cmd(self, alias: str) -> list[str]:
+    def _oneshot_cmd(self, alias: str, mode: str = "strategy") -> list[str]:
         return ([self.executable] + self.base_flags
-                + ["--model", alias] + self._sys_flags())
+                + ["--model", alias] + self._sys_flags(mode))
 
     # --- public API -------------------------------------------------------
-    def advise(self, payload: str, alias: str) -> str:
+    def advise(self, payload: str, alias: str, mode: str = "strategy") -> str:
         if self.warm_enabled:
             try:
-                return self._warm_advise(payload, alias)
+                return self._warm_advise(payload, alias, mode)
             except WarmUnsupported as exc:
                 self.logger.warning("Warm session unsupported (%s); using one-shot mode.", exc)
                 self.warm_enabled = False
                 self._close_all()
             except TimeoutError as exc:
                 self.logger.warning("Warm session timed out (%s); recycling.", exc)
-                self._close_session(alias)
-        return self._oneshot(payload, alias)
+                self._close_session(alias, mode)
+        return self._oneshot(payload, alias, mode)
 
-    def _warm_advise(self, payload: str, alias: str) -> str:
+    def _warm_advise(self, payload: str, alias: str, mode: str = "strategy") -> str:
         with self._lock:
-            sess = self._sessions.get(alias)
+            sess = self._sessions.get((alias, mode))
             if sess and sess.turns >= self.recycle_after:
                 self.logger.info("Recycling %s session after %d turns.", alias, sess.turns)
                 sess.close()
                 sess = None
             if sess is None or not sess.alive():
-                sess = _WarmSession(self._warm_cmd(alias), self.env, self.logger)
-                self._sessions[alias] = sess
+                sess = _WarmSession(self._warm_cmd(alias, mode), self.env, self.logger)
+                self._sessions[(alias, mode)] = sess
         try:
             return sess.send(payload, self.input_fmt, self.timeout)
         except WarmUnsupported:
-            self._close_session(alias)
+            self._close_session(alias, mode)
             raise
 
-    def _oneshot(self, payload: str, alias: str) -> str:
+    def _oneshot(self, payload: str, alias: str, mode: str = "strategy") -> str:
         try:
             proc = subprocess.run(
-                self._oneshot_cmd(alias), input=payload, capture_output=True,
+                self._oneshot_cmd(alias, mode), input=payload, capture_output=True,
                 text=True, encoding="utf-8", timeout=self.timeout, env=self.env,
                 creationflags=_CREATE_NO_WINDOW,
             )
@@ -249,9 +254,9 @@ class ModelClient:
         """Recycle all warm sessions (e.g. on a new run) to clear context."""
         self._close_all()
 
-    def _close_session(self, alias: str) -> None:
+    def _close_session(self, alias: str, mode: str = "strategy") -> None:
         with self._lock:
-            sess = self._sessions.pop(alias, None)
+            sess = self._sessions.pop((alias, mode), None)
         if sess:
             sess.close()
 
