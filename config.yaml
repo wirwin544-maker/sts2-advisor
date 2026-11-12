@@ -102,6 +102,7 @@ paths:
   combat_plan_file: "runtime/combat_plan.json"     # model plan tied to a state hash
   run_status_file: "runtime/run_status.json"
   control_file: "runtime/control.json"              # Pause/Resume flag shared with overlay
+  claude_usage_file: "runtime/claude_usage.json"     # Authenticated Claude Code statusLine snapshot
   monster_reference_file: "data/monster_moves.json" # Generated from user's XLSX
   reference_cache_file: "data/reference_cache.json" # All imported spreadsheet worksheets
 

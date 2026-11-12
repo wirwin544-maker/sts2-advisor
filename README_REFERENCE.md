@@ -4,6 +4,7 @@ This is a community modification of [Spire Oracle](https://github.com/bnipper-cr
 
 ## Added functionality
 
+* **Claude usage limits** with 5-hour and 7-day verified snapshots, remaining percentages, reset times, snapshot age, and an official Usage dashboard button. Enable the optional interactive statusLine listener following [USAGE_DISPLAY.md](USAGE_DISPLAY.md). Oracle background Claude requests cannot obtain subscription limit percentages directly.
 * **Pause / Resume button** on the overlay. A pause hides advice and suppresses new Claude requests. The backend continues collecting the deck and recording run state. Resuming invalidates old advice and requests a new answer for the live game state. A request already executing when Pause is clicked may still consume Claude usage, but its result is discarded.
 * **Combat coaching** with ordered, conditional card actions and legal-first-action checks. The plan disappears immediately if the live hand, enemy intent, HP, block, relics, energy or other tracked state changes, then can be recalculated. Claude does not execute cards. This is not a deterministic combat solver, and only the first step is checked against live card playability.
 * **Persistent per-run journal and build selector**, including strategy and Claude decision history across advisor restarts (from the earlier combat patch).

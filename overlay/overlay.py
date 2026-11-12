@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import webbrowser
 import os
 import sys
 import time
@@ -17,6 +18,9 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from bridge import usage
 
 
 def _resolve(p: str) -> Path:
@@ -154,6 +158,11 @@ class Overlay:
         self.combat_plan_path = _resolve(paths.get('combat_plan_file', 'runtime/combat_plan.json'))
         self.run_status_path = _resolve(paths.get('run_status_file', 'runtime/run_status.json'))
         self.control_path = _resolve(paths.get('control_file', 'runtime/control.json'))
+        self.usage_path = _resolve(paths.get('claude_usage_file', 'runtime/claude_usage.json'))
+        self._runtime_dir = _resolve(paths.get('runtime_dir', 'runtime'))
+        self._usage_last_check = 0.
+        self._last_transcript_key = None
+        self._completed_count = 0
         self.build_choice_path = _resolve('runtime/build_choice.json')
         self.build_request_path = _resolve('runtime/build_request.json')
         self.build_suggestion_path = _resolve('runtime/build_suggestion.json')
@@ -188,6 +197,8 @@ class Overlay:
         self.pause_button = tk.Button(bar, text='Pause', command=self._toggle_pause,
                   bg='#755321', fg='white', bd=0, padx=9)
         self.pause_button.pack(side='right', padx=5, pady=3)
+        tk.Button(bar, text='Usage', command=self._open_usage_page, bg='#263b51',
+                  fg='white', bd=0).pack(side='right', padx=5, pady=3)
         tk.Button(bar, text='Build', command=self._build_picker, bg='#263b51',
                   fg='white', bd=0).pack(side='right', padx=5, pady=3)
         tk.Button(bar, text='X', command=self.root.destroy, bg='#1d2230',
@@ -200,6 +211,12 @@ class Overlay:
         self.status_label = tk.Label(self.root, text='Waiting for game…', anchor='w',
             bg='#151a23', fg='#c8d7f0', font=(oc['font_family'], 9), padx=10, pady=5)
         self.status_label.pack(fill='x', side='top')
+        # Authenticated subscription-limit snapshots from the interactive
+        # Claude Code statusLine. Headless print mode has no percentages.
+        self.usage_label = tk.Label(self.root, text='Claude limits: awaiting verified reading…',
+            anchor='w', justify='left', bg='#151a23', fg='#e6ce85',
+            font=(oc['font_family'], 8), padx=10, pady=4, wraplength=450)
+        self.usage_label.pack(fill='x', side='top')
         container = tk.Frame(self.root, bg='#11131a')
         container.pack(fill='both', expand=True)
         scroll = tk.Scrollbar(container)
@@ -220,6 +237,26 @@ class Overlay:
         self._build_recommend_label = None
         self._layout()
         self._sync_pause_button()
+
+    def _open_usage_page(self):
+        # Open the official live account dashboard, no credentials processed.
+        webbrowser.open('https://claude.ai/settings/usage')
+
+    def _update_usage_label(self):
+        snapshot = usage.load_snapshot(self.usage_path)
+        message = usage.usage_text(snapshot)
+        run_id = self._run_data.get('run_id')
+        if run_id:
+            path = self._runtime_dir / 'runs' / str(run_id) / 'transcript.jsonl'
+            try:
+                stamp = (run_id, path.stat().st_mtime_ns, path.stat().st_size)
+            except OSError:
+                stamp = (run_id, None, None)
+            if stamp != self._last_transcript_key:
+                self._last_transcript_key = stamp
+                self._completed_count = usage.completed_advice_count(path)
+            message += f'\nOracle completed advice this run: {self._completed_count} (not quota)'
+        self.usage_label.configure(text=message)
 
     def _toggle_pause(self):
         # A file shared with the bridge is the source of truth. Atomic replace
@@ -256,6 +293,7 @@ class Overlay:
         scale = min(sw / 1920, sh / 1080)
         font_size = max(10, min(15, round(int(self.oc.get('font_size', 11)) * scale)))
         self.text.configure(font=(self.oc['font_family'], font_size))
+        self.usage_label.configure(wraplength=max(240, w - 24))
         self._size = (w, h)
         if self.oc.get('x') is not None and self.oc.get('y') is not None and not self._moved:
             px, py = int(self.oc['x']), int(self.oc['y'])
@@ -380,6 +418,9 @@ class Overlay:
             content = ('Waiting for Slay the Spire 2 + STS2MCP…\n\n'
                        'Combat recommendations update from the live game-state reader.\n'
                        'Choose Build to set a run strategy when the game starts.')
+        if time.monotonic() - self._usage_last_check > 5:
+            self._usage_last_check = time.monotonic()
+            self._update_usage_label()
         if self._paused:
             content = ('SUGGESTIONS PAUSED\n\n'
                        'Game tracking continues. Claude recommendations and model calls '
