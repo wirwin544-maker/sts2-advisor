@@ -17,6 +17,7 @@ from . import combat, control, grounding, screens, signature, thesis, util, work
 from .monster_reference import MonsterReference
 from .reference_search import ReferenceLibrary
 from .run_memory import RunJournal, atomic_json, candidates, read_json
+from . import build_catalog
 from .model_client import ModelClient
 
 
@@ -354,7 +355,9 @@ def main() -> None:
                     current_fight = None
                     combat_requests = 0
                 if journal.accept_build_choice():
-                    # The same choice screen now needs advice under a new plan.
+                    # Selecting a build must immediately release the advisor,
+                    # even if a previous model call has not completed yet.
+                    build_pending_sig = None
                     debouncer.reset()
                     adv_worker.invalidate(None)
                     last_state_sig = None
@@ -395,11 +398,28 @@ def main() -> None:
                         'status': 'paused', 'run_id': journal.run_id})
                     time.sleep(poll)
                     continue
+                cancelled = read_json(journal.cancel_path)
+                if (build_pending_sig and cancelled.get('run_id') == journal.run_id and
+                        cancelled.get('request_id') == build_pending_sig.split(':')[-1]):
+                    build_pending_sig = None
+                    adv_worker.invalidate(None)
+                    last_state_sig = None
+                    logger.info('Build suggestion cancelled by player. Continuing normal coaching.')
                 build_req = journal.build_request()
                 if build_req:
-                    opts = candidates(journal.active.get("character", ""))
+                    requested_character = build_catalog.normalize_character(build_req.get('character'))
+                    actual_character = build_catalog.normalize_character(journal.active.get('character'))
+                    character = actual_character if actual_character != 'Unknown' else requested_character
+                    opts = candidates(character)
+                    if not opts:
+                        logger.warning('Build recommendation needs a character; skipping request.')
+                        journal.record_suggestion({
+                            'run_id': journal.run_id, 'request_id': build_req['request_id'],
+                            'status': 'error', 'build': '', 'why': 'Select your character first.'})
+                        time.sleep(poll)
+                        continue
                     start_state = {
-                        "character": journal.active.get("character"),
+                        "character": character,
                         "ascension": journal.active.get("ascension"),
                         "act": (state.get("run") or {}).get("act"),
                         "floor": (state.get("run") or {}).get("floor"),
@@ -412,8 +432,11 @@ def main() -> None:
                     payload = ("Suggest a starting strategic BUILD for this StS2 run, before "
                                "the first Ancient blessing or relic pick if possible. "
                                "Choose EXACTLY from these options:\n" +
-                               "\n".join(f"- {o}" for o in opts) +
-                               "\nCURRENT STATE:\n" + json.dumps(start_state, default=str) +
+                               build_catalog.details_for_prompt(character) +
+                               "\nReference source uses v0.107.1 editorial tiers, not verified win-rates. "
+                               "Do not demand an unavailable rare card. "
+                               "If no reliable starting information is available choose Flexible / adapt to rewards.\n"
+                               "CURRENT STATE:\n" + json.dumps(start_state, default=str) +
                                "\nFormat PICK: <exact option> and WHY: <short sentence>.")
                     req_sig = "build:" + journal.run_id + ":" + build_req["request_id"]
                     adv_worker.request(req_sig, payload, model.model_for("build"),
@@ -433,11 +456,16 @@ def main() -> None:
                             suggestion.get('request_id') == build_pending_sig.split(':')[-1]):
                         build_pending_sig = None
                         last_state_sig = None
-                    elif time.monotonic() - build_pending_at < 65:
+                    elif time.monotonic() - build_pending_at < 55:
                         time.sleep(poll)
                         continue
                     else:
                         logger.warning('Build recommendation timed out; resuming normal coaching.')
+                        journal.record_suggestion({
+                            'run_id': journal.run_id,
+                            'request_id': build_pending_sig.split(':')[-1],
+                            'status': 'timeout', 'build': '',
+                            'why': 'Claude took too long. Choose a build directly or retry.'})
                         build_pending_sig = None
                         adv_worker.invalidate(None)
                         last_state_sig = None

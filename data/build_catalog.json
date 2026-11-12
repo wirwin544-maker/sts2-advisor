@@ -1,0 +1,387 @@
+{
+  "version": "v0.107.1",
+  "ranking_method": "Editorial S-C archetype rankings from slaythespire2.net, not measured win rates. Other sources are secondary, not combined into one numerical rank.",
+  "checked_on": "2026-11-11",
+  "source_urls": [
+    "https://slaythespire2.net/build/",
+    "https://sts2.gg/builds",
+    "https://spire-codex.com/guides/builds-guide"
+  ],
+  "characters": {
+    "ironclad": [
+      {
+        "name": "Flexible / adapt to rewards",
+        "tier": "Flexible",
+        "description": "Choose high-value cards based on early rewards; reassess as your deck develops.",
+        "core_cards": [],
+        "url": "https://slaythespire2.net/build/ironclad",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "Oracle default, not ranked"
+      },
+      {
+        "name": "Exhaust synergy",
+        "tier": "S",
+        "description": "Exhaust low-value cards to turn each exhaust into block and draw.",
+        "core_cards": [
+          "Feel No Pain",
+          "Dark Embrace",
+          "Burning Pact",
+          "True Grit"
+        ],
+        "url": "https://slaythespire2.net/build/ironclad",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Strength scaling",
+        "tier": "A",
+        "description": "Stack Strength then benefit from multi-hit attacks.",
+        "core_cards": [
+          "Inflame",
+          "Demon Form",
+          "Twin Strike",
+          "Whirlwind"
+        ],
+        "url": "https://slaythespire2.net/build/ironclad",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Block / Barricade",
+        "tier": "A",
+        "description": "Retain Block and convert it into damage.",
+        "core_cards": [
+          "Barricade",
+          "Body Slam",
+          "Unmovable",
+          "Juggernaut"
+        ],
+        "url": "https://slaythespire2.net/build/ironclad",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Vulnerable",
+        "tier": "B",
+        "description": "Keep enemies Vulnerable and amplify damage.",
+        "core_cards": [
+          "Bash",
+          "Cruelty",
+          "Vicious"
+        ],
+        "url": "https://slaythespire2.net/build/ironclad",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Self-damage payoff",
+        "tier": "B",
+        "description": "Spend HP selectively for strength and energy.",
+        "core_cards": [
+          "Rupture",
+          "Bloodletting",
+          "Offering"
+        ],
+        "url": "https://slaythespire2.net/build/ironclad",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      }
+    ],
+    "silent": [
+      {
+        "name": "Flexible / adapt to rewards",
+        "tier": "Flexible",
+        "description": "Choose high-value cards based on early rewards; reassess as your deck develops.",
+        "core_cards": [],
+        "url": "https://slaythespire2.net/build/silent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "Oracle default, not ranked"
+      },
+      {
+        "name": "Poison",
+        "tier": "S",
+        "description": "Stack Poison while maintaining strong defense.",
+        "core_cards": [
+          "Deadly Poison",
+          "Bouncing Flask",
+          "Noxious Fumes"
+        ],
+        "url": "https://slaythespire2.net/build/silent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Sly Discard",
+        "tier": "A",
+        "description": "Turn discard and draw into free Sly effects.",
+        "core_cards": [
+          "Tools of the Trade",
+          "Acrobatics",
+          "Calculated Gamble"
+        ],
+        "url": "https://slaythespire2.net/build/silent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Shivs",
+        "tier": "A",
+        "description": "Generate Shivs and scale repeated attacks.",
+        "core_cards": [
+          "Blade Dance",
+          "Accuracy",
+          "Infinite Blades"
+        ],
+        "url": "https://slaythespire2.net/build/silent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Dexterity Block",
+        "tier": "B",
+        "description": "Accumulate Dexterity and efficient defense.",
+        "core_cards": [
+          "Footwork",
+          "Afterimage",
+          "Backflip"
+        ],
+        "url": "https://slaythespire2.net/build/silent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Draw Tempo",
+        "tier": "B",
+        "description": "Use card draws to trigger incidental damage.",
+        "core_cards": [
+          "Speedster",
+          "Serpent Form",
+          "Acrobatics"
+        ],
+        "url": "https://slaythespire2.net/build/silent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      }
+    ],
+    "defect": [
+      {
+        "name": "Flexible / adapt to rewards",
+        "tier": "Flexible",
+        "description": "Choose high-value cards based on early rewards; reassess as your deck develops.",
+        "core_cards": [],
+        "url": "https://slaythespire2.net/build/defect",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "Oracle default, not ranked"
+      },
+      {
+        "name": "Frost / Focus",
+        "tier": "S",
+        "description": "Stack Focus and Frost for defensive scaling.",
+        "core_cards": [
+          "Glacier",
+          "Defragment",
+          "Capacitor",
+          "Coolheaded"
+        ],
+        "url": "https://slaythespire2.net/build/defect",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Claw Zero-Cost",
+        "tier": "A",
+        "description": "Loop zero-cost cards and accumulate Claw damage.",
+        "core_cards": [
+          "Claw",
+          "All for One",
+          "Feral"
+        ],
+        "url": "https://slaythespire2.net/build/defect",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Lightning / Orbs",
+        "tier": "B",
+        "description": "Scale Lightning through channels and powers.",
+        "core_cards": [
+          "Ball Lightning",
+          "Storm",
+          "Tempest"
+        ],
+        "url": "https://slaythespire2.net/build/defect",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Dark orbs",
+        "tier": "B",
+        "description": "Charge Dark orbs for a delayed burst.",
+        "core_cards": [
+          "Darkness"
+        ],
+        "url": "https://slaythespire2.net/build/defect",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Status Engine",
+        "tier": "C",
+        "description": "Turn status card creation into damage and orb triggers.",
+        "core_cards": [
+          "Trash to Treasure",
+          "Smokestack",
+          "Iteration"
+        ],
+        "url": "https://slaythespire2.net/build/defect",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      }
+    ],
+    "regent": [
+      {
+        "name": "Flexible / adapt to rewards",
+        "tier": "Flexible",
+        "description": "Choose high-value cards based on early rewards; reassess as your deck develops.",
+        "core_cards": [],
+        "url": "https://slaythespire2.net/build/regent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "Oracle default, not ranked"
+      },
+      {
+        "name": "Stars",
+        "tier": "S",
+        "description": "Generate Stars and cash them in for expensive payoffs.",
+        "core_cards": [
+          "Glow",
+          "Genesis",
+          "Hidden Cache"
+        ],
+        "url": "https://slaythespire2.net/build/regent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Alignment Loop",
+        "tier": "A",
+        "description": "Cycle a tight deck to chain repeated Stars and draw.",
+        "core_cards": [
+          "Alignment",
+          "Glow"
+        ],
+        "url": "https://slaythespire2.net/build/regent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Forge / Sovereign Blade",
+        "tier": "B",
+        "description": "Forge and retain Sovereign Blade until it is lethal.",
+        "core_cards": [
+          "Summon Forth",
+          "Seeking Edge",
+          "Furnace"
+        ],
+        "url": "https://slaythespire2.net/build/regent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Void Form",
+        "tier": "B",
+        "description": "Exploit discounts on the first two cards each turn.",
+        "core_cards": [
+          "Void Form",
+          "Seven Stars"
+        ],
+        "url": "https://slaythespire2.net/build/regent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Card Creation",
+        "tier": "C",
+        "description": "Create colorless cards and scale on creation.",
+        "core_cards": [
+          "Spectrum Shift",
+          "Arsenal",
+          "Pillar of Creation"
+        ],
+        "url": "https://slaythespire2.net/build/regent",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      }
+    ],
+    "necrobinder": [
+      {
+        "name": "Flexible / adapt to rewards",
+        "tier": "Flexible",
+        "description": "Choose high-value cards based on early rewards; reassess as your deck develops.",
+        "core_cards": [],
+        "url": "https://slaythespire2.net/build/necrobinder",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "Oracle default, not ranked"
+      },
+      {
+        "name": "Soul Cycle",
+        "tier": "S",
+        "description": "Use Souls for draw and damage engines.",
+        "core_cards": [
+          "Glimpse Beyond",
+          "Banshee's Cry"
+        ],
+        "url": "https://slaythespire2.net/build/necrobinder",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Doom",
+        "tier": "A",
+        "description": "Stack Doom for executions beyond armor.",
+        "core_cards": [
+          "Neurosurge",
+          "Oblivion"
+        ],
+        "url": "https://slaythespire2.net/build/necrobinder",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Osty / Summon",
+        "tier": "A",
+        "description": "Buff and command Osty for repeated value.",
+        "core_cards": [
+          "Reanimate",
+          "Necro Mastery"
+        ],
+        "url": "https://slaythespire2.net/build/necrobinder",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Ethereal",
+        "tier": "B",
+        "description": "Play Ethereal cards and exploit repeated triggers.",
+        "core_cards": [
+          "Pull from Below",
+          "Pagestorm",
+          "Spirit of Ash"
+        ],
+        "url": "https://slaythespire2.net/build/necrobinder",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      },
+      {
+        "name": "Reaper Form",
+        "tier": "C",
+        "description": "Set up big hits and convert damage into Doom.",
+        "core_cards": [
+          "Reaper Form"
+        ],
+        "url": "https://slaythespire2.net/build/necrobinder",
+        "secondary_url": "https://sts2.gg/builds",
+        "source": "slaythespire2.net v0.107.1 editorial"
+      }
+    ]
+  }
+}

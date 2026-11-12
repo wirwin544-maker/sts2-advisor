@@ -52,3 +52,7 @@ Unit tests run without the game or a Claude account. The Claude CLI selftest nee
 * `data/reference_cache.json`: `sheets -> rows -> cells`, with source sheet, original row number, column, text or numeric values, formulas and hyperlink targets.
 * `data/monster_moves.json`: combat entries keyed conservatively by the exact normalized enemy name and monster type, with move columns C-H, notes I, attack patterns J and original row details.
 * `data/reference_media/`: preserved source image assets (not used for combat decisions).
+
+## Ranked clickable build chooser
+
+The chooser includes source-linked editorial archetypes for all five characters on **game v0.107.1**, with a manual character picker when MCP reports `Unknown`, immediate selection without Claude, and visible model timeout/error handling. See [BUILD_CHOOSER.md](BUILD_CHOOSER.md) and `data/build_catalog.json`. The data is a dated offline snapshot, not a live ranking scraper.

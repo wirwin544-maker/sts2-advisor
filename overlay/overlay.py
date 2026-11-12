@@ -20,7 +20,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from bridge import usage
+from bridge import usage, build_catalog
 
 
 def _resolve(p: str) -> Path:
@@ -165,6 +165,7 @@ class Overlay:
         self._completed_count = 0
         self.build_choice_path = _resolve('runtime/build_choice.json')
         self.build_request_path = _resolve('runtime/build_request.json')
+        self.build_cancel_path = _resolve('runtime/build_cancel.json')
         self.build_suggestion_path = _resolve('runtime/build_suggestion.json')
         self.poll_ms = max(150, int(oc['poll_interval_s'] * 1000))
         self.heartbeat_stale_s = float(oc['heartbeat_stale_s'])
@@ -235,6 +236,11 @@ class Overlay:
         self._shown_build_runs = set()
         self._build_dialog = None
         self._build_recommend_label = None
+        self._build_pending = None
+        self._build_recommend_button = None
+        self._build_character_var = None
+        self._build_character_manual = False
+        self._build_rebuild = None
         self._layout()
         self._sync_pause_button()
 
@@ -317,60 +323,244 @@ class Overlay:
         self.text.configure(state='disabled')
 
     def _update_build_suggestion(self):
-        if self._build_dialog is None or not self._build_dialog.winfo_exists():
+        """Poll a correlated response without freezing Tk or displaying stale jobs."""
+        dialog = self._build_dialog
+        if dialog is None or not dialog.winfo_exists():
+            return
+        if self._build_character_var is not None and not self._build_character_manual:
+            # Character data may appear only after the first event resolves.
+            live_char = build_catalog.normalize_character(self._run_data.get('character'))
+            if live_char != 'Unknown' and self._build_character_var.get() != live_char:
+                self._build_character_var.set(live_char)
+        pending = self._build_pending
+        if pending is None:
             return
         rec = read_json(self.build_suggestion_path)
-        if rec.get('run_id') == self._run_data.get('run_id'):
+        if (rec.get('run_id') == pending['run_id'] and
+                rec.get('request_id') == pending['request_id']):
+            status = rec.get('status', 'ready')
+            suggestion = rec.get('build') or ''
+            choices = build_catalog.names(pending['character'])
+            if status == 'ready' and suggestion in choices:
+                self._build_recommend_label.config(
+                    text=f'Claude recommends: {suggestion}\n{rec.get("why", "")[:360]}',
+                    fg='#a6e5b9')
+                self._build_recommend_button.configure(state='normal')
+            else:
+                self._build_recommend_label.config(
+                    text=rec.get('why') or 'No valid recommendation received. Select a build directly.',
+                    fg='#f4c58b')
+                self._build_recommend_button.configure(state='disabled')
+            dialog._completed_build_request = pending if status == 'ready' else None
+            self._build_pending = None
+        elif time.time() - pending['requested_at'] > 60:
             self._build_recommend_label.config(
-                text=f"Claude: {rec.get('build', '?')}\n{rec.get('why', '')}")
+                text='Claude did not respond within 60 seconds. Select a ranked build below or retry.',
+                fg='#f4c58b')
+            self._build_recommend_button.configure(state='disabled')
+            self._build_pending = None
 
     def _build_picker(self):
         if self._build_dialog and self._build_dialog.winfo_exists():
             self._build_dialog.lift()
             return
-        data = self._run_data
+        data = dict(self._run_data)
         if not data.get('run_id'):
             return
-        opts = data.get('build_options') or ['Flexible / adapt to rewards']
+        run_id = data['run_id']
         popup = tk.Toplevel(self.root)
         self._build_dialog = popup
-        popup.title('Choose run strategy')
+        self._build_pending = None
+        self._build_character_manual = False
+        popup.title('Choose a run strategy - v0.107.1 rankings')
         popup.configure(bg='#151a23')
         popup.attributes('-topmost', True)
         area = self._area or work_area(self.root)
-        pw, ph = min(560, area[2] - 30), min(380, area[3] - 40)
-        popup.geometry(f'{pw}x{ph}+{area[0] + max(0, (area[2]-pw)//2)}+{area[1] + 80}')
-        tk.Label(popup, text=f"{data.get('character', 'Character')} | Act {data.get('act', 1)}",
-                 bg='#151a23', fg='#c9dcf2', font=('Consolas', 13, 'bold')).pack(pady=(16, 8))
-        tk.Label(popup, text='Select a direction, not a forced deck list. You can revise later.',
-                 bg='#151a23', fg='#cdd3dc', wraplength=pw - 30).pack(pady=4)
-        selection = tk.StringVar(value=data.get('build') if data.get('build') in opts else opts[0])
-        tk.OptionMenu(popup, selection, *opts).pack(pady=10)
-        def save_choice(choice):
-            if choice not in opts:
-                return
-            write_json(self.build_choice_path, {'run_id': data['run_id'], 'build': choice})
-            self._run_data['build'] = choice
+        pw, ph = min(740, area[2] - 30), min(680, area[3] - 45)
+        x_pos = area[0] + max(0, (area[2]-pw)//2)
+        y_pos = area[1] + 50
+        popup.geometry(f'{pw}x{ph}{x_pos:+d}{y_pos:+d}')
+        popup.minsize(500, 440)
+
+        def dismiss():
+            if self._build_pending:
+                write_json(self.build_cancel_path, {
+                    'run_id': run_id, 'request_id': self._build_pending['request_id']})
+            self._build_pending = None
+            self._build_dialog = None
+            self._build_character_var = None
+            self._build_rebuild = None
             popup.destroy()
-        tk.Button(popup, text='Use selected build', command=lambda: save_choice(selection.get()),
-                  bg='#295d81', fg='white', bd=0, padx=12, pady=6).pack(pady=4)
+        popup.protocol('WM_DELETE_WINDOW', dismiss)
+
+        heading = tk.Frame(popup, bg='#151a23')
+        heading.pack(fill='x', padx=16, pady=(12, 5))
+        tk.Label(heading, text='Starting build', bg='#151a23', fg='#c9dcf2',
+                 font=('Consolas', 15, 'bold')).pack(side='left')
+        tk.Label(heading, text=f"Act {data.get('act') or '?'}",
+                 bg='#151a23', fg='#acbccc', font=('Consolas', 11)).pack(side='right')
+        tk.Label(popup, text=('Rankings are editorial for StS2 v0.107.1. '
+                'Builds are directions, not guaranteed deck lists. Click one to select it.'),
+                bg='#151a23', fg='#cbd2dc', wraplength=pw-30,
+                justify='left').pack(fill='x', padx=16, pady=(0, 9))
+
+        charrow = tk.Frame(popup, bg='#151a23')
+        charrow.pack(fill='x', padx=16, pady=(0, 6))
+        tk.Label(charrow, text='Character:', bg='#151a23', fg='#d7e3ef').pack(side='left')
+        initial_char = build_catalog.normalize_character(data.get('character'))
+        selected_character = tk.StringVar(value=initial_char if initial_char != 'Unknown' else 'Select character...')
+        self._build_character_var = selected_character
+        all_chars = ['Select character...'] + list(build_catalog.CHARACTERS)
+        charmenu = tk.OptionMenu(charrow, selected_character, *all_chars)
+        charmenu.configure(bg='#263b51', fg='white', activebackground='#355573',
+                           highlightthickness=0, bd=0)
+        charmenu['menu'].configure(bg='#263b51', fg='white')
+        charmenu.pack(side='left', padx=8)
+        tk.Label(charrow, text='Manually choose if MCP reports Unknown.', bg='#151a23',
+                 fg='#a4b2bf').pack(side='left')
+        if initial_char != 'Unknown':
+            # Never let a manual choice contradict a real, known character.
+            charmenu.configure(state='disabled')
+
+        results = tk.Frame(popup, bg='#171d28')
+        results.pack(fill='both', expand=True, padx=14, pady=(3, 6))
+        canvas = tk.Canvas(results, bg='#171d28', highlightthickness=0, bd=0)
+        scrollbar = tk.Scrollbar(results, orient='vertical', command=canvas.yview)
+        scrollframe = tk.Frame(canvas, bg='#171d28')
+        canvas.create_window((0, 0), window=scrollframe, anchor='nw', tags='rows')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollframe.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure('rows', width=e.width))
+
+        chosen = tk.StringVar(value='')
+        detail = tk.Label(popup, text='', bg='#151a23', fg='#a9c7e8',
+                          anchor='w', justify='left', wraplength=pw-38)
+        detail.pack(fill='x', padx=16, pady=(3, 5))
+        source_frame = tk.Frame(popup, bg='#151a23')
+        source_frame.pack(fill='x', padx=16, pady=(0, 6))
+        selection_button = tk.Button(source_frame, text='Use selected build',
+                                     bg='#295d81', fg='white', bd=0, padx=10, pady=6)
+        selection_button.pack(side='left', padx=(0, 12))
+        source_button = tk.Button(source_frame, text='View build guide',
+                                  bg='#263b51', fg='white', bd=0, padx=8, pady=6)
+        source_button.pack(side='left', padx=(0, 6))
+        compare_button = tk.Button(source_frame, text='Compare other site',
+                                   bg='#263b51', fg='white', bd=0, padx=8, pady=6)
+        compare_button.pack(side='left')
+
+        active_entries = []
+        def selected_entry():
+            return next((e for e in active_entries if e['name'] == chosen.get()), None)
+
+        def update_selection():
+            entry = selected_entry()
+            if not entry:
+                detail.config(text='Select a character and build. You can change strategy later.')
+                selection_button.config(state='disabled')
+                source_button.config(state='disabled')
+                compare_button.config(state='disabled')
+                return
+            cards = ', '.join(entry.get('core_cards') or []) or 'No fixed core cards'
+            detail.config(text=f"Core cards: {cards}\nSource: {entry.get('source', 'Unranked')}")
+            selection_button.config(state='normal')
+            source_button.config(state='normal')
+            compare_button.config(state='normal')
+
+        def redraw(*_):
+            for widget in scrollframe.winfo_children():
+                widget.destroy()
+            active_entries.clear()
+            char = build_catalog.normalize_character(selected_character.get())
+            active_entries.extend(build_catalog.entries(char))
+            if not active_entries:
+                tk.Label(scrollframe, text='Choose your character to display builds.',
+                    bg='#171d28', fg='#d4dce6', pady=28).pack(fill='x')
+                chosen.set('')
+                update_selection()
+                return
+            names = [e['name'] for e in active_entries]
+            saved = data.get('build')
+            chosen.set(saved if saved in names else names[0])
+            for entry in active_entries:
+                tier = entry.get('tier', '?')
+                label = entry['name']
+                summary = entry.get('description','')
+                item = tk.Radiobutton(scrollframe, text=f'[{tier}]  {label}\n{summary}',
+                    variable=chosen, value=label, command=update_selection,
+                    indicatoron=False, justify='left', anchor='w', padx=12, pady=9,
+                    font=('Consolas', 10), wraplength=max(300,pw-85),
+                    bg='#243246', fg='#f3f5fa', selectcolor='#315d7b',
+                    activebackground='#365470', activeforeground='white',
+                    relief='flat', bd=1, highlightthickness=0)
+                item.pack(fill='x', padx=4, pady=3)
+            update_selection()
+            canvas.yview_moveto(0)
+
+        def character_changed(*_):
+            if selected_character.get() != initial_char:
+                self._build_character_manual = True
+            self._build_pending = None
+            self._build_recommend_label.config(text='')
+            self._build_recommend_button.config(state='disabled')
+            redraw()
+        selected_character.trace_add('write', character_changed)
+
+        def save_choice(value: str):
+            char = build_catalog.normalize_character(selected_character.get())
+            if value not in build_catalog.names(char):
+                return
+            write_json(self.build_choice_path, {'run_id': run_id, 'character': char, 'build': value})
+            self._run_data['build'] = value
+            dismiss()
+
+        selection_button.config(command=lambda: save_choice(chosen.get()))
+        source_button.config(command=lambda: webbrowser.open((selected_entry() or {}).get('url', 'https://slaythespire2.net/build')))
+        compare_button.config(command=lambda: webbrowser.open((selected_entry() or {}).get('secondary_url', 'https://sts2.gg/builds')))
+
+        footer = tk.Frame(popup, bg='#151a23')
+        footer.pack(fill='x', padx=16, pady=(0, 5))
         def ask_claude():
+            char = build_catalog.normalize_character(selected_character.get())
+            if char == 'Unknown':
+                self._build_recommend_label.config(
+                    text='Select a character first. MCP has not identified one.', fg='#f4c58b')
+                return
             request_id = str(uuid.uuid4())
-            write_json(self.build_request_path, {'run_id': data['run_id'],
-                'request_id': request_id})
-            self._build_recommend_label.config(text='Asking Claude for a starting recommendation…')
-        tk.Button(popup, text='Ask Claude to recommend a build', command=ask_claude,
-                  bg='#293d4e', fg='white', bd=0, pady=5).pack(pady=4)
-        self._build_recommend_label = tk.Label(popup, bg='#151a23', fg='#a6e5b9',
-                                               wraplength=pw - 30, justify='center', text='')
-        self._build_recommend_label.pack(padx=8, pady=6)
+            self._build_pending = {'run_id': run_id, 'character': char,
+                                   'request_id': request_id, 'requested_at': time.time()}
+            # Correlate responses by request ID, preventing stale results.
+            write_json(self.build_request_path, {
+                'run_id': run_id, 'character': char, 'request_id': request_id})
+            self._build_recommend_button.configure(state='disabled')
+            self._build_recommend_label.config(
+                text='Asking Claude... You can select a build above immediately. '
+                     'A failed request will time out within 60 seconds.', fg='#e6ce85')
+
+        tk.Button(footer, text='Ask Claude (optional)', command=ask_claude,
+            bg='#293d4e', fg='white', bd=0, padx=10, pady=6).pack(side='left')
+        tk.Button(footer, text='Not now', command=dismiss, bg='#303844',
+            fg='white', bd=0, padx=8, pady=6).pack(side='left', padx=8)
         def accept_suggestion():
             suggestion = read_json(self.build_suggestion_path)
-            if suggestion.get('run_id') == data['run_id']:
+            pending = self._build_pending
+            if not pending:
+                # Last completed request identity is deliberately retained below.
+                pending = getattr(popup, '_completed_build_request', None)
+            if (pending and suggestion.get('run_id') == run_id and
+                suggestion.get('request_id') == pending['request_id'] and
+                suggestion.get('status', 'ready') == 'ready'):
                 save_choice(suggestion.get('build', ''))
-        tk.Button(popup, text='Use Claude recommendation', command=accept_suggestion,
-                  bg='#295d81', fg='white', bd=0, pady=4).pack(pady=3)
-        self._update_build_suggestion()
+        self._build_recommend_button = tk.Button(footer, text='Use Claude recommendation',
+                command=accept_suggestion, bg='#295d81', fg='white',
+                bd=0, padx=10, pady=6, state='disabled')
+        self._build_recommend_button.pack(side='right')
+        self._build_recommend_label = tk.Label(popup, bg='#151a23', fg='#a6e5b9',
+             anchor='w', justify='left', text='', wraplength=pw-30)
+        self._build_recommend_label.pack(fill='x', padx=16, pady=(0, 10))
+        self._build_rebuild = redraw
+        redraw()
 
     def _tick(self):
         disk_pause = read_json(self.control_path).get('paused') is True
@@ -413,11 +603,12 @@ class Overlay:
                     content = self.advice_path.read_text(encoding='utf-8')
                 except OSError:
                     content = 'Waiting for first decision screen…'
-            self._update_build_suggestion()
         else:
             content = ('Waiting for Slay the Spire 2 + STS2MCP…\n\n'
                        'Combat recommendations update from the live game-state reader.\n'
                        'Choose Build to set a run strategy when the game starts.')
+        # Handle timeout even when game/bridge heartbeat is unavailable.
+        self._update_build_suggestion()
         if time.monotonic() - self._usage_last_check > 5:
             self._usage_last_check = time.monotonic()
             self._update_usage_label()

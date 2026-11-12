@@ -80,7 +80,7 @@ class AdviceWorker:
                         options = choices or []
                         self.journal.record_suggestion({
                             'run_id': run_id, 'request_id': signature.split(':')[-1],
-                            'build': options[0] if options else '',
+                            'status': 'error', 'build': '',
                             'why': f'Claude could not provide a recommendation: {str(exc)[:120]}'})
                     else:
                         self._write(f"[ {kind} ] advisor error: {str(exc)[:160]}")
@@ -114,7 +114,7 @@ class AdviceWorker:
                     selected = options[0] if options else ''
                 why = re.search(r'^WHY:\s*(.+?)\s*$', response, re.M | re.I)
                 result = {'run_id': run_id, 'request_id': signature.split(':')[-1],
-                          'build': selected,
+                          'status': 'ready', 'build': selected,
                           'why': why.group(1).strip() if why else
                           'No verified explanation returned.'}
                 if self.journal:

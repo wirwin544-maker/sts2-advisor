@@ -11,23 +11,24 @@ import time
 import uuid
 from pathlib import Path
 from . import util
+from . import build_catalog
 
-BUILDS = {
-    "ironclad": ["Flexible / adapt to rewards", "Strength scaling", "Exhaust synergy", "Self-damage payoff", "Block / Barricade"],
-    "silent": ["Flexible / adapt to rewards", "Poison", "Shivs", "Discard / Sly"],
-    "defect": ["Flexible / adapt to rewards", "Frost / Focus", "Lightning / Orbs", "Dark orbs", "Glass / Multi-target"],
-    "regent": ["Flexible / adapt to rewards", "Stars", "Forge / Sovereign Blade"],
-    "necrobinder": ["Flexible / adapt to rewards", "Osty / Summon", "Doom", "Souls / HP-cost"],
+# Deprecated labels remain accepted when a run predates the curated catalog.
+LEGACY_NAMES = {
+    'ironclad': ('Exhaust synergy', 'Strength scaling', 'Block / Barricade', 'Self-damage payoff'),
+    'silent': ('Shivs', 'Discard / Sly'),
+    'defect': ('Frost / Focus', 'Lightning / Orbs', 'Dark orbs'),
+    'regent': ('Stars', 'Forge / Sovereign Blade'),
+    'necrobinder': ('Osty / Summon', 'Doom', 'Souls / HP-cost'),
 }
 
 
 def character_name(state: dict) -> str:
-    raw = (state.get('player') or {}).get('character') or (state.get('run') or {}).get('character') or 'Unknown'
-    return str(raw).replace('The ', '').strip()
+    return build_catalog.from_state(state)
 
 
 def candidates(character: str) -> list[str]:
-    return BUILDS.get(character.lower(), ["Flexible / adapt to rewards"])
+    return build_catalog.names(character)
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -53,6 +54,7 @@ class RunJournal:
         self.status_path = self.root / 'run_status.json'
         self.choice_path = self.root / 'build_choice.json'
         self.request_path = self.root / 'build_request.json'
+        self.cancel_path = self.root / 'build_cancel.json'
         self.suggestion_path = self.root / 'build_suggestion.json'
         self.active = read_json(self.active_path)
         self._last_event_key = None
@@ -109,12 +111,29 @@ class RunJournal:
         act = run.get('act')
         if not isinstance(floor, int):
             return False
-        char = character_name(state)
-        asc = run.get('ascension')
+        detected_char = character_name(state)
         prev = self.active
+        previous_char = build_catalog.normalize_character(prev.get('character'))
+        # STS2MCP may omit the character on pre-reward screens. Do not treat
+        # missing fields as a new identity, or erase a manually selected build.
+        char = detected_char if detected_char != 'Unknown' else previous_char
+        asc = run.get('ascension')
+        if (prev.get('character_source') == 'manual' and
+                previous_char != 'Unknown' and detected_char != 'Unknown'):
+            # A real character from MCP overrides the player's temporary
+            # fallback without inventing a new run or preserving the wrong build.
+            if detected_char != previous_char:
+                self.active['character'] = detected_char
+                self.active['build'] = ''
+                self.append('character_corrected', character=detected_char,
+                            former=previous_char)
+                previous_char, char = detected_char, detected_char
+            self.active['character_source'] = 'game'
+            self._save_active()
         new = not prev.get('run_id') or prev.get('status') == 'ended'
         if prev and not new:
-            if prev.get('character') != char or prev.get('ascension') != asc:
+            if (previous_char != 'Unknown' and char != 'Unknown' and
+                    previous_char != char) or prev.get('ascension') != asc:
                 new = True
             elif (floor <= 1 and act == 1 and isinstance(prev.get('floor'), int)
                   and prev['floor'] > floor):
@@ -132,7 +151,7 @@ class RunJournal:
             self._save_active()
             self.append('run_started', character=char, ascension=asc, act=act, floor=floor)
             # Prevent a previous run's build preference from being applied.
-            for stale in (self.choice_path, self.request_path, self.suggestion_path):
+            for stale in (self.choice_path, self.request_path, self.suggestion_path, self.cancel_path):
                 try:
                     stale.unlink()
                 except FileNotFoundError:
@@ -140,8 +159,10 @@ class RunJournal:
             return True
 
         changed = (prev.get('floor') != floor or prev.get('act') != act)
-        if changed:
+        if changed or (previous_char == 'Unknown' and char != 'Unknown'):
             self.active['floor'], self.active['act'] = floor, act
+            if previous_char == 'Unknown' and char != 'Unknown':
+                self.active['character'] = char
             self._save_active()
             self.append('floor', act=act, floor=floor,
                         hp=(state.get('player') or {}).get('hp'))
@@ -158,9 +179,18 @@ class RunJournal:
         if choice.get('run_id') != self.run_id:
             return False
         selection = str(choice.get('build', ''))
-        if selection not in candidates(self.active.get('character', '')):
+        current = build_catalog.normalize_character(self.active.get('character'))
+        requested = build_catalog.normalize_character(choice.get('character'))
+        # Manual character selection is allowed only while MCP cannot tell us.
+        if current == 'Unknown' and requested != 'Unknown':
+            self.active['character'] = requested
+            self.active['character_source'] = 'manual'
+            current = requested
+        allowed = set(candidates(current)) | set(LEGACY_NAMES.get(current.lower(), ()))
+        if selection not in allowed:
             return False
         if selection == self.build:
+            self._save_active()  # persists any newly resolved character
             return False
         self.active['build'] = selection
         self._save_active()
@@ -172,6 +202,10 @@ class RunJournal:
         if req.get('run_id') != self.run_id or not req.get('request_id'):
             return None
         if req.get('request_id') == self.active.get('last_build_request'):
+            return None
+        cancelled = read_json(self.cancel_path)
+        if (cancelled.get('run_id') == self.run_id and
+                cancelled.get('request_id') == req.get('request_id')):
             return None
         self.active['last_build_request'] = req['request_id']
         self._save_active()
