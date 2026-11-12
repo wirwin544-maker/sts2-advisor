@@ -312,7 +312,14 @@ def main() -> None:
     game_over_handled = False
     combat_debounce = signature.Debouncer(cfg.get("combat", {}).get("settle_s", 0.65))
     orb_stabilizer = combat.OrbStabilizer(
-        cfg.get('combat', {}).get('orb_confirmation_polls', 3))
+        cfg.get('combat', {}).get('orb_confirmation_polls', 3),
+        value_required=cfg.get('combat', {}).get('orb_value_confirmation_polls', 2),
+        quiet_seconds=cfg.get('combat', {}).get('orb_quiet_seconds', 1.0))
+    orb_unstable_since = None
+    orb_last_warning = 0.0
+    logger.info('Orb tracker v2: %d identity polls, %d value polls, %.1fs quiet window',
+                orb_stabilizer.required, orb_stabilizer.value_required,
+                orb_stabilizer.quiet_seconds)
     combat_enabled = bool(cfg.get("combat", {}).get("enabled", True))
     combat_interval = float(cfg.get("combat", {}).get("min_request_interval_s", 3.0))
     combat_max = int(cfg.get("combat", {}).get("max_requests_per_fight", 30))
@@ -504,7 +511,23 @@ def main() -> None:
                                     ', '.join(str(f['live_name']) for f in found))
                     # Stabilize the orb queue independently of the rest of the
                     # battle. Never ask Claude to act on one disputed orb read.
-                    orb_verified = orb_stabilizer.observe((state.get('player') or {}).get('orbs'))
+                    raw_orbs = (state.get('player') or {}).get('orbs')
+                    orb_verified = orb_stabilizer.observe(raw_orbs)
+                    if orb_verified:
+                        orb_unstable_since = None
+                    else:
+                        now_orb = time.monotonic()
+                        if orb_unstable_since is None:
+                            orb_unstable_since = now_orb
+                        if (now_orb - orb_unstable_since >= 3.0 and
+                                now_orb - orb_last_warning >= 15.0):
+                            logger.warning(
+                                'Orb state unstable (%s); confirmed=%s; observed=%s',
+                                orb_stabilizer.pending_reason,
+                                [o.get('id') or o.get('name') for o in orb_stabilizer.confirmed],
+                                ([o.get('id') or o.get('name') for o in raw_orbs]
+                                 if isinstance(raw_orbs, list) else None))
+                            orb_last_warning = now_orb
                     verified_state = orb_stabilizer.stable_state(state)
                     sig = 'combat:' + combat.digest(verified_state)
                     if last_state_sig != sig or not orb_verified:
@@ -551,6 +574,7 @@ def main() -> None:
                 atomic_json(combat_status_path, {"status": "inactive", "run_id": journal.run_id})
                 current_fight = None
                 orb_stabilizer.reset()
+                orb_unstable_since = None
                 combat_requests = 0
                 combat_debounce.reset()
 

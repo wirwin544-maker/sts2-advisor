@@ -16,63 +16,124 @@ COMBAT_KINDS = {'monster', 'elite', 'boss', 'hand_select'}
 
 
 class OrbStabilizer:
-    """Confirm successive orb readings before changing player-facing advice.
+    """Stabilize orb *layout* separately from mutable orb values.
 
-    A partial read during card animations can briefly report a different queue.
-    The advisor must not treat one such sample as a valid new Dualcast target.
-    A snapshot is accepted after ``required`` consecutive matching samples.
+    STS2MCP returns orbs in next-to-evoke order. IDs/order identify which
+    orbs occupy slots. Passive/evoke values can change without orb replacement
+    (Dark charge, Focus), and must not be treated as a new set of orbs.
+
+    Unconfirmed reads never change the player-facing orb list. A brief quiet
+    interval after a disputed read avoids toggling the advice panel between
+    waiting/ready on successive 0.3-second polls. All recommendations remain
+    suspended until both layout AND current numeric values are verified.
     """
 
-    def __init__(self, required: int = 3):
+    def __init__(self, required: int = 3, value_required: int = 2,
+                 quiet_seconds: float = 1.0, clock=None):
+        import time
         self.required = max(2, int(required))
+        self.value_required = max(2, int(value_required))
+        self.quiet_seconds = max(0.0, float(quiet_seconds))
+        self._clock = clock or time.monotonic
         self.reset()
 
     def reset(self) -> None:
         self.confirmed: list[dict] = []
-        self._confirmed_key: str | None = None
-        self._candidate_key: str | None = None
-        self._count = 0
+        self._confirmed_identity: str | None = None
+        self._confirmed_values: str | None = None
+        self._candidate_identity: str | None = None
+        self._identity_count = 0
+        self._candidate_values: str | None = None
+        self._values_count = 0
+        self._quiet_until = 0.0
+        self.pending_reason = ''
+        self.last_observed: list[dict] | None = None
 
     @staticmethod
-    def _key(orbs: list[dict]) -> str:
-        # Do not include display descriptions or transient hover-text values.
-        canonical = [{k: orb.get(k) for k in ('id', 'name', 'passive_val', 'evoke_val')}
-                     for orb in orbs if isinstance(orb, dict)]
-        return json.dumps(canonical, sort_keys=True, ensure_ascii=False, default=str)
+    def _identity(orbs: list[dict]) -> str:
+        # Prefer stable machine IDs over localized display names. Order matters.
+        # Two matching IDs are still distinct slots, and values are checked
+        # separately so charged Dark orbs do not trigger layout replacement.
+        return json.dumps([str(o.get('id') or o.get('name') or '?').casefold()
+                           for o in orbs], ensure_ascii=False)
+
+    @staticmethod
+    def _values(orbs: list[dict]) -> str:
+        # Exact numeric values matter for tactics, but hover text doesn't.
+        return json.dumps([(o.get('passive_val'), o.get('evoke_val'))
+                           for o in orbs], default=str)
 
     def observe(self, raw_orbs: object) -> bool:
-        """Return True only when the current queue matches a confirmed reading.
+        """True only when current orb identities and effects are verified.
 
-        Absence of an ``orbs`` field after observing orbs is NOT evidence that
-        they vanished; the state reader may have omitted an incomplete field.
+        Missing data is an uncertain read, not proof that all orbs disappeared.
+        Empty *lists* can be real and require layout confirmation.
         """
+        now = self._clock()
         if not isinstance(raw_orbs, list):
-            if self._confirmed_key is not None and self.confirmed:
-                self._candidate_key = None
-                self._count = 0
+            if self._confirmed_identity is not None and self.confirmed:
+                self._quiet_until = max(self._quiet_until, now + self.quiet_seconds)
+                self.pending_reason = 'orb data temporarily absent'
+                self.last_observed = None
                 return False
             raw_orbs = []
-        raw_orbs = [o for o in raw_orbs if isinstance(o, dict)]
-        key = self._key(raw_orbs)
-        if key == self._confirmed_key:
-            self._candidate_key = None
-            self._count = 0
-            return True
-        if key == self._candidate_key:
-            self._count += 1
+        raw = [o for o in raw_orbs if isinstance(o, dict)]
+        self.last_observed = deepcopy(raw)
+        identity = self._identity(raw)
+        values = self._values(raw)
+
+        if identity != self._confirmed_identity:
+            self.pending_reason = 'orb layout changed'
+            if identity == self._candidate_identity:
+                self._identity_count += 1
+            else:
+                self._candidate_identity = identity
+                self._identity_count = 1
+                self._quiet_until = max(self._quiet_until, now + self.quiet_seconds)
+            self._candidate_values = None
+            self._values_count = 0
+            # Do not let a short-lived candidate appear on screen just
+            # because it lasted three fast polls.
+            if self._identity_count < self.required or now < self._quiet_until:
+                return False
+            self.confirmed = deepcopy(raw)
+            self._confirmed_identity = identity
+            self._confirmed_values = values
+            self._candidate_identity = None
+            self._identity_count = 0
+            self.pending_reason = 'settling after orb change'
+            return now >= self._quiet_until
+
+        # Layout still matches. A transient incorrect layout cannot replace
+        # the last confirmed list, even if it appeared on one or two polls.
+        self._candidate_identity = None
+        self._identity_count = 0
+        if values != self._confirmed_values:
+            self.pending_reason = 'orb value changed'
+            if values == self._candidate_values:
+                self._values_count += 1
+            else:
+                self._candidate_values = values
+                self._values_count = 1
+                self._quiet_until = max(self._quiet_until, now + self.quiet_seconds)
+            if self._values_count < self.value_required or now < self._quiet_until:
+                return False
+            self.confirmed = deepcopy(raw)
+            self._confirmed_values = values
+            self._candidate_values = None
+            self._values_count = 0
         else:
-            self._candidate_key = key
-            self._count = 1
-        if self._count < self.required:
+            self._candidate_values = None
+            self._values_count = 0
+
+        if now < self._quiet_until:
+            self.pending_reason = 'waiting for stable orb readings'
             return False
-        self.confirmed = deepcopy(raw_orbs)
-        self._confirmed_key = key
-        self._candidate_key = None
-        self._count = 0
+        self.pending_reason = ''
         return True
 
     def stable_state(self, state: dict) -> dict:
-        """A copy with verified orbs, never the unconfirmed raw API reading."""
+        """Copy with the last verified orb layout and values only."""
         copy = dict(state)
         copy['player'] = {**(state.get('player') or {}), 'orbs': deepcopy(self.confirmed)}
         return copy

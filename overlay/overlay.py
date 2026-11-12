@@ -112,15 +112,17 @@ def format_combat(status: dict, plan: dict) -> str:
         head += '\nENEMIES: ' + ' | '.join(enemies) + '\n'
     orb_state = status.get('orbs') or {}
     orb_verified = status.get('orb_read_stable') is not False
-    if not orb_verified:
-        head += '\nORB STATE UNVERIFIED: waiting for matching readings. Do not follow an old orb play order.\n'
-    elif orb_state.get('left_to_right'):
+    # Always show the last confirmed orb queue. Showing an entirely different
+    # warning header on a single suspect poll made the orb line appear to flash.
+    if orb_state.get('left_to_right'):
         orb_display = [f"{o.get('name', '?')} ({o.get('evoke_val', '?')} evoke)"
                        for o in orb_state['left_to_right']]
         head += '\nORBS LEFT → RIGHT: ' + ' | '.join(orb_display) + '\n'
         next_orb = orb_state.get('next_to_evoke') or {}
         head += ('NEXT EVOKE: rightmost ' + str(next_orb.get('name') or '?')
                  + ' (Dualcast hits this orb twice)\n')
+    elif not orb_verified:
+        head += '\nORBS: acquiring a reliable reading...\n' 
     if status.get('reference_total'):
         head += (f"REFERENCE: {status.get('reference_matched', 0)}/"
                  f"{status['reference_total']} monsters matched "
@@ -129,7 +131,7 @@ def format_combat(status: dict, plan: dict) -> str:
         head += '\nSELECTION: ' + str(status['selection']) + '\n'
     if status.get('status') == 'waiting':
         if not orb_verified:
-            return head + '\nCombat recommendations are suspended until the orb queue settles.'
+            return head + '\nCombat advice paused while orb changes are verified.'
         return head + '\nWaiting for player turn / combat selection to resolve.'
     if status.get('status') == 'limit':
         return head + '\nCombat advice limit reached for this fight. Configure combat.max_requests_per_fight to raise it.'

@@ -19,7 +19,7 @@ def orb(name, evoke=8):
 
 class OrbTests(unittest.TestCase):
     def test_unconfirmed_change_holds_last_verified_orb(self):
-        tracker = OrbStabilizer(required=3)
+        tracker = OrbStabilizer(required=3, quiet_seconds=0)
         initial = [orb('Frost', 5), orb('Dark', 24)]
         changed = [orb('Lightning', 8), orb('Frost', 5)]
         self.assertFalse(tracker.observe(initial))
@@ -36,7 +36,7 @@ class OrbTests(unittest.TestCase):
         self.assertEqual(tracker.confirmed, changed)
 
     def test_missing_orb_data_cannot_discard_confirmed_queue(self):
-        tracker = OrbStabilizer(required=2)
+        tracker = OrbStabilizer(required=2, quiet_seconds=0)
         self.assertFalse(tracker.observe([orb('Dark')]))
         self.assertTrue(tracker.observe([orb('Dark')]))
         self.assertFalse(tracker.observe(None))
@@ -52,9 +52,9 @@ class OrbTests(unittest.TestCase):
         plan = {'status': 'ready', 'run_id': 'run1', 'signature': 'combat:example',
                 'steps': [{'action': 'end_turn'}]}
         text = format_combat(status, plan)
-        self.assertIn('ORB STATE UNVERIFIED', text)
-        self.assertIn('suspended', text)
-        self.assertNotIn('NEXT EVOKE', text)
+        self.assertIn('ORBS LEFT → RIGHT: Frost', text)
+        self.assertIn('advice paused', text)
+        self.assertIn('NEXT EVOKE', text)
         self.assertNotIn('End turn', text)
 
 
