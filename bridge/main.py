@@ -297,9 +297,12 @@ def main() -> None:
     debouncer = signature.Debouncer(cfg["debounce"]["settle_s"])
     journal = RunJournal(cfg["paths"].get("runtime_dir", "runtime"))
     deck = DeckTracker(starter_decks, util.resolve("runtime/deck.json"), logger)
+    control_path = util.resolve(cfg['paths'].get('control_file', 'runtime/control.json'))
+    pause_gate = control.PauseGate(control_path)
     adv_worker = worker.AdviceWorker(
         model, thesis_store, cfg["paths"]["advice_file"], logger,
-        journal=journal, combat_file=cfg["paths"].get("combat_plan_file", "runtime/combat_plan.json"))
+        journal=journal, combat_file=cfg["paths"].get("combat_plan_file", "runtime/combat_plan.json"),
+        pause_gate=pause_gate)
     adv_worker.start()
 
     heartbeat_path = util.resolve(cfg["paths"]["heartbeat_file"])
@@ -324,7 +327,6 @@ def main() -> None:
     combat_interval = float(cfg.get("combat", {}).get("min_request_interval_s", 3.0))
     combat_max = int(cfg.get("combat", {}).get("max_requests_per_fight", 30))
     combat_status_path = util.resolve(cfg["paths"].get("combat_status_file", "runtime/combat_status.json"))
-    control_path = util.resolve(cfg['paths'].get('control_file', 'runtime/control.json'))
     was_paused = False
     was_battle_paused = False
     current_fight = None
@@ -408,7 +410,7 @@ def main() -> None:
                 # Continue collecting deck and run observations even while
                 # paused, but never request or display new recommendations.
                 deck.maybe_snapshot(state)
-                paused, battle_paused = control.pause_flags(control_path)
+                paused, battle_paused = pause_gate.flags()
                 if paused != was_paused:
                     adv_worker.invalidate(None)  # discard any in-flight advice
                     debouncer.reset()
@@ -423,8 +425,7 @@ def main() -> None:
                 if battle_paused != was_battle_paused:
                     # Only invalidate a live combat job. Never cancel a map,
                     # event, shop or card selection when toggling battle pause.
-                    on_battle = (state.get('state_type') in combat.COMBAT_KINDS
-                                 and bool(state.get('battle')))
+                    on_battle = control.is_combat_screen(state)
                     if on_battle:
                         adv_worker.invalidate(None)
                         combat_debounce.reset()
@@ -513,9 +514,26 @@ def main() -> None:
 
                 # 3. Combat uses a separate, instantly invalidated plan. Card
                 # effects change the signature and force a fresh legal-action check.
-                is_battle_screen = (state.get("state_type") in combat.COMBAT_KINDS and
-                                    bool(state.get("battle")))
-                if combat_enabled and is_battle_screen:
+                is_battle_screen = control.is_combat_screen(state)
+                if battle_paused and is_battle_screen and not state.get('battle'):
+                    # MCP sometimes identifies the encounter before its full
+                    # battle snapshot is ready. This is still a paused battle,
+                    # not a non-combat decision for the general advisor.
+                    adv_worker.invalidate(None)
+                    run = state.get('run') or {}
+                    player = state.get('player') or {}
+                    atomic_json(combat_status_path, {
+                        'status': 'paused_battle', 'run_id': journal.run_id,
+                        'act': run.get('act'), 'floor': run.get('floor'),
+                        'round': '?', 'hp': player.get('hp'),
+                        'max_hp': player.get('max_hp'), 'block': player.get('block'),
+                        'energy': player.get('energy'),
+                        'max_energy': player.get('max_energy'),
+                        'enemies': [], 'orbs': {},
+                    })
+                    time.sleep(poll)
+                    continue
+                if combat_enabled and is_battle_screen and bool(state.get('battle')):
                     sig = "combat:" + combat.digest(state)
                     round_no = (state.get("battle") or {}).get("round")
                     fight_key = ((state.get("run") or {}).get("act"),
@@ -525,6 +543,8 @@ def main() -> None:
                         current_fight = fight_key
                         combat_requests = 0
                         orb_stabilizer.reset()
+                        if battle_paused:
+                            logger.info('New encounter: battle pause remains ON; no combat model requests.')
                         found = reference.encounter(state)
                         logger.info('Encounter reference: %d/%d enemies matched (sheet v%s): %s',
                                     sum(f['reference'] is not None for f in found),
@@ -587,11 +607,11 @@ def main() -> None:
                             journal.format_for_prompt(4, 1200), journal.build,
                             reference_text=(reference.prompt_for_battle(state) +
                               '\n\n=== V0.113.0 BETA PATCH ===\n' + beta_compat.contextual_advice(state)))
-                        adv_worker.request(sig, payload, model.model_for("combat"),
-                                           "combat", run_id=journal.run_id, state=verified_state)
-                        combat_debounce.mark_fired(sig)
-                        last_combat_call = now
-                        combat_requests += 1
+                        if adv_worker.request(sig, payload, model.model_for("combat"),
+                                              "combat", run_id=journal.run_id, state=verified_state):
+                            combat_debounce.mark_fired(sig)
+                            last_combat_call = now
+                            combat_requests += 1
                     time.sleep(poll)
                     continue
                 atomic_json(combat_status_path, {"status": "inactive", "run_id": journal.run_id})

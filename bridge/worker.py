@@ -16,13 +16,14 @@ from .run_memory import atomic_json, candidates
 class AdviceWorker:
     def __init__(self, model_client, thesis_store: thesis_mod.ThesisStore,
                  advice_file: str, logger: logging.Logger, journal=None,
-                 combat_file: str = 'runtime/combat_plan.json'):
+                 combat_file: str = 'runtime/combat_plan.json', pause_gate=None):
         self.model_client = model_client
         self.thesis = thesis_store
         self.advice_path = util.resolve(advice_file)
         self.advice_path.parent.mkdir(parents=True, exist_ok=True)
         self.combat_path = util.resolve(combat_file)
         self.journal = journal
+        self.pause_gate = pause_gate
         self.logger = logger
         self._cv = threading.Condition()
         self._job = None
@@ -42,13 +43,19 @@ class AdviceWorker:
 
     def request(self, signature: str, payload: str, alias: str, kind: str,
                 run_id: str | None = None, state: dict | None = None,
-                build_options: list[str] | None = None) -> None:
+                build_options: list[str] | None = None) -> bool:
+        # Do not even enqueue a request if the player paused that advice type.
+        # The state can change after the bridge's last poll, so enforce it here.
+        if self.pause_gate is not None and not self.pause_gate.allows(kind):
+            self.invalidate(None)
+            return False
         with self._cv:
             self._job = (signature, payload, alias, kind, run_id, state, build_options)
             self._latest_sig = signature
             self._cv.notify()
         if kind not in ('combat', 'build'):
             self._write(f"[ {kind} ]  thinking…")
+        return True
 
     def stop(self) -> None:
         with self._cv:
@@ -65,6 +72,11 @@ class AdviceWorker:
                     return
                 signature, payload, alias, kind, run_id, state, choices = self._job
                 self._job = None
+            # A paused fight must not start a queued model request, even if
+            # the bridge had already submitted the job before the pause click.
+            if self.pause_gate is not None and not self.pause_gate.allows(kind):
+                self.invalidate(None)
+                continue
             mode = kind if kind in ('combat', 'build') else 'strategy'
             try:
                 response = self.model_client.advise(payload, alias, mode=mode)
@@ -133,9 +145,16 @@ class AdviceWorker:
             self.logger.info('Advice committed for %s (%s)', kind, alias)
 
     def _is_current(self, signature: str, run_id: str | None) -> bool:
+        # Reject delayed model results as soon as Pause All / Pause Battle is
+        # enabled. This also protects the brief interval before the next poll.
         with self._cv:
-            return (self._latest_sig == signature and
-                    (not self.journal or self.journal.run_id == run_id))
+            latest = (self._latest_sig == signature and
+                      (not self.journal or self.journal.run_id == run_id))
+        if not latest:
+            return False
+        # Only combat advice is battle-gated; noncombat jobs remain allowed.
+        kind = 'combat' if signature.startswith('combat:') else 'strategy'
+        return self.pause_gate is None or self.pause_gate.allows(kind)
 
     def _write(self, value: str) -> None:
         try:

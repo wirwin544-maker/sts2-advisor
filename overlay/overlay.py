@@ -20,7 +20,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from bridge import usage, build_catalog
+from bridge import usage, build_catalog, control
 from bridge.run_memory import atomic_json
 
 
@@ -258,9 +258,8 @@ class Overlay:
         self.text.pack(fill='both', expand=True)
         scroll.config(command=self.text.yview)
         self._set_text('Waiting for Slay the Spire 2 + STS2MCP…')
-        initial_controls = read_json(self.control_path)
-        self._paused = initial_controls.get('paused') is True
-        self._battle_paused = initial_controls.get('battle_paused') is True
+        self._pause_gate = control.PauseGate(self.control_path)
+        self._paused, self._battle_paused = self._pause_gate.flags()
         self._last_content = ''
         self._visible = True
         self._ever_seen = False
@@ -305,9 +304,15 @@ class Overlay:
     def _change_pause(self, field: str):
         # Preserve the other independent pause flag when changing one button.
         controls = read_json(self.control_path)
+        # A temporary file-read failure must not silently clear the other
+        # pause flag. Keep the last visible values until an explicit click.
+        controls.setdefault('paused', getattr(self, '_paused', False))
+        controls.setdefault('battle_paused', getattr(self, '_battle_paused', False))
         controls[field] = not (controls.get(field) is True)
         controls['updated_at'] = time.time()
         write_json(self.control_path, controls)
+        if hasattr(self, '_pause_gate'):
+            self._pause_gate.flags()
         self._paused = controls.get('paused') is True
         self._battle_paused = controls.get('battle_paused') is True
         self._sync_pause_button()
@@ -614,9 +619,7 @@ class Overlay:
         redraw()
 
     def _tick(self):
-        controls = read_json(self.control_path)
-        disk_pause = controls.get('paused') is True
-        disk_battle_pause = controls.get('battle_paused') is True
+        disk_pause, disk_battle_pause = self._pause_gate.flags()
         if disk_pause != self._paused or disk_battle_pause != self._battle_paused:
             self._paused = disk_pause
             self._battle_paused = disk_battle_pause
@@ -652,6 +655,11 @@ class Overlay:
             status = read_json(self.combat_status_path)
             if (status.get('status') in ('active', 'waiting', 'limit', 'paused_battle') and
                     status.get('run_id') == run_id):
+                # UI pause state takes priority over a stale status file. This
+                # prevents a new battle from briefly showing earlier advice
+                # while the bridge is waiting for its next game-state poll.
+                if self._battle_paused:
+                    status = {**status, 'status': 'paused_battle'}
                 content = format_combat(status, read_json(self.combat_plan_path))
             else:
                 try:
