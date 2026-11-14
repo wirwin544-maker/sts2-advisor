@@ -47,6 +47,28 @@ def classify(state: dict) -> tuple[str | None, bool]:
     return None, False
 
 
+def automatic_map_message(state: dict) -> str | None:
+    """Avoid an AI request unless the live map offers an actual route choice.
+
+    ``next_options`` is the set of reachable map nodes supplied by STS2MCP,
+    not the full act graph. A forced single next node requires no analysis.
+    A zero-option transition is not a valid choice either.
+    """
+    if (state or {}).get('state_type') != 'map':
+        return None
+    raw = (state.get('map') or {}).get('next_options')
+    if not isinstance(raw, list):
+        return None  # no authoritative option set: don't guess
+    if len(raw) == 1:
+        node = raw[0] if isinstance(raw[0], dict) else {}
+        node_type = str(node.get('type') or 'the next room')
+        return ('[ map ]\nOnly one available route: ' + node_type +
+                '. Proceed normally. No AI suggestion needed.')
+    if len(raw) == 0:
+        return '[ map ]\nWaiting for available map routes. No AI suggestion needed.'
+    return None
+
+
 def _position_words(n: int) -> list[str]:
     """Natural left-to-right labels matching what the player sees as map forks."""
     presets = {

@@ -12,3 +12,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Locally imported, user-provided gameplay reference. Never publish workbook
+# contents to a public fork without the data owner's redistribution permission.
+data/reference_cache.json
+data/monster_moves.json
+data/*.xlsx
+data/*.xls
+data/reference_media/

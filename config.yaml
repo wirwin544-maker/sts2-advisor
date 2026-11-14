@@ -29,6 +29,8 @@ model:
   # screens, to keep latency down. Bump any of these to "opus" if you want more
   # deliberation on that screen (at the cost of speed).
   per_screen:
+    combat:        "sonnet"     # turn-by-turn tactical advice
+    build:         "sonnet"     # optional build recommendation
     card_reward:   "sonnet"
     map:           "sonnet"
     rest_site:     "sonnet"
@@ -96,14 +98,29 @@ paths:
   advice_file: "runtime/latest_advice.txt"
   heartbeat_file: "runtime/heartbeat"
   log_file: "runtime/advisor.log"
+  combat_status_file: "runtime/combat_status.json" # bridge live state, no model cost
+  combat_plan_file: "runtime/combat_plan.json"     # model plan tied to a state hash
+  run_status_file: "runtime/run_status.json"
+  control_file: "runtime/control.json"              # Pause/Resume flag shared with overlay
+  monster_reference_file: "data/monster_moves.json" # Generated from user's XLSX
+  reference_cache_file: "data/reference_cache.json" # All imported spreadsheet worksheets
+
+combat:
+  enabled: true
+  settle_s: 0.65                    # wait for animations/state to settle
+  min_request_interval_s: 4.0     # Claude Pro usage protection, seconds
+  max_requests_per_fight: 20      # prevents unbounded combat token usage
+
+memory:
+  recent_events: 10               # bounded recent journal events per decision
 
 overlay:
   poll_interval_s: 0.4                 # how often the overlay re-reads advice
   # If the heartbeat file is older than this, the bridge is considered down and
   # the overlay hides/closes itself.
   heartbeat_stale_s: 5.0
-  width: 460
-  height: 320
+  width: 460                        # legacy (auto-sized by current monitor)
+  height: 320                       # legacy (auto-sized by current monitor)
   opacity: 0.92
   font_family: "Consolas"
   font_size: 11
@@ -127,3 +144,8 @@ dev:
   sample_state_file: "data/sample_state.json"
   # Log the full prompt sent to the model (verbose).
   log_prompts: false
+
+# PUBLIC BETA v0.113.0 support. Leave auto if STS2MCP reports the game mode.
+game:
+  target_version: '0.113.0'
+  mode_override: 'auto'  # auto, standard, blitz, dread

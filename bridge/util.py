@@ -31,8 +31,9 @@ def setup_logging(log_file: str, level: int = logging.INFO) -> logging.Logger:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("sts2advisor")
     logger.setLevel(level)
+    logger.propagate = False
     logger.handlers.clear()
-    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s [pid=%(process)d]: %(message)s",
                             datefmt="%H:%M:%S")
     fh = logging.FileHandler(log_path, encoding="utf-8")
     fh.setFormatter(fmt)

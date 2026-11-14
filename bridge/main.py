@@ -13,7 +13,12 @@ import json
 import time
 
 from . import client as client_mod
-from . import grounding, screens, signature, thesis, util, worker
+from .single_instance import claim_instance
+from . import combat, control, grounding, screens, signature, thesis, util, worker
+from .monster_reference import MonsterReference
+from .reference_search import ReferenceLibrary
+from .run_memory import RunJournal, atomic_json, candidates, read_json
+from . import build_catalog, beta_compat
 from .model_client import ModelClient
 
 
@@ -177,13 +182,16 @@ class DeckTracker:
         new_cards = [{"name": n, "is_upgraded": u, "count": ct}
                      for (n, u), ct in sorted(counts.items())]
         floor = (state.get("run") or {}).get("floor")
+        old_floor = self._floor
+        old_source = self._source
         self._floor = floor if isinstance(floor, int) else self._floor
         how = "turn 1" if clean else "approx (mid-combat)"
         src = f"observed in combat {how} (floor {floor}, {total} cards)"
         changed = new_cards != self._cards
         self._cards = new_cards
         self._source = src
-        self._save()
+        if changed or self._floor != old_floor or self._source != old_source:
+            self._save()
         if changed:
             self._logger.info("Deck updated %s: %d cards (floor %s).", how, total, floor)
 
@@ -244,10 +252,24 @@ def _game_over_message(state: dict) -> str:
 
 def main() -> None:
     cfg = util.load_config()
+    # Avoid two bridge loops issuing duplicate Claude requests and writing the
+    # same runtime files when autostart and start.bat are both enabled.
+    instance_guard = claim_instance(int(cfg.get('bridge', {}).get('instance_port', 15581)))
+    if instance_guard is None:
+        print('Spire Oracle bridge is already running; declining duplicate start.')
+        return
     logger = util.setup_logging(cfg["paths"]["log_file"])
-    logger.info("StS2 Advisor starting.")
+    logger.info("StS2 Advisor starting. Beta-target compatibility: v%s, build %s (runtime still requires STS2MCP rebuild).", beta_compat.TARGET_VERSION, beta_compat.STEAM_BUILD_ID)
 
     dataset = grounding.Dataset.load(cfg["paths"]["data_dir"])
+    reference = MonsterReference.load(util.resolve(
+        cfg['paths'].get('monster_reference_file', 'data/monster_moves.json')))
+    logger.info('Monster reference loaded: %d entries, game %s',
+                len(reference.entries), reference.source_version)
+    library = ReferenceLibrary.load(util.resolve(
+        cfg['paths'].get('reference_cache_file', 'data/reference_cache.json')))
+    logger.info('Full reference loaded: %d sheets, game %s',
+                len(library.sheets), library.version)
     logger.info("Dataset loaded: %d cards, %d relics (game v%s)",
                 len(dataset.cards), len(dataset.relics), dataset.version)
     if not dataset.cards:
@@ -273,10 +295,14 @@ def main() -> None:
     model = ModelClient(cfg, logger)
     thesis_store = thesis.ThesisStore(cfg["paths"]["thesis_file"])
     debouncer = signature.Debouncer(cfg["debounce"]["settle_s"])
-    tracker = RunTracker()
+    journal = RunJournal(cfg["paths"].get("runtime_dir", "runtime"))
     deck = DeckTracker(starter_decks, util.resolve("runtime/deck.json"), logger)
+    control_path = util.resolve(cfg['paths'].get('control_file', 'runtime/control.json'))
+    pause_gate = control.PauseGate(control_path)
     adv_worker = worker.AdviceWorker(
-        model, thesis_store, cfg["paths"]["advice_file"], logger)
+        model, thesis_store, cfg["paths"]["advice_file"], logger,
+        journal=journal, combat_file=cfg["paths"].get("combat_plan_file", "runtime/combat_plan.json"),
+        pause_gate=pause_gate)
     adv_worker.start()
 
     heartbeat_path = util.resolve(cfg["paths"]["heartbeat_file"])
@@ -287,7 +313,28 @@ def main() -> None:
     backoff = cfg["bridge"]["reconnect_backoff_s"]
     log_prompts = cfg["dev"].get("log_prompts", False)
     game_over_handled = False
-
+    combat_debounce = signature.Debouncer(cfg.get("combat", {}).get("settle_s", 0.65))
+    orb_stabilizer = combat.OrbStabilizer(
+        cfg.get('combat', {}).get('orb_confirmation_polls', 3),
+        value_required=cfg.get('combat', {}).get('orb_value_confirmation_polls', 2),
+        quiet_seconds=cfg.get('combat', {}).get('orb_quiet_seconds', 1.0))
+    orb_unstable_since = None
+    orb_last_warning = 0.0
+    logger.info('Orb tracker v2: %d identity polls, %d value polls, %.1fs quiet window',
+                orb_stabilizer.required, orb_stabilizer.value_required,
+                orb_stabilizer.quiet_seconds)
+    combat_enabled = bool(cfg.get("combat", {}).get("enabled", True))
+    combat_interval = float(cfg.get("combat", {}).get("min_request_interval_s", 3.0))
+    combat_max = int(cfg.get("combat", {}).get("max_requests_per_fight", 30))
+    combat_status_path = util.resolve(cfg["paths"].get("combat_status_file", "runtime/combat_status.json"))
+    was_paused = False
+    was_battle_paused = False
+    current_fight = None
+    combat_requests = 0
+    last_combat_call = 0.0
+    last_state_sig = None
+    build_pending_sig = None
+    build_pending_at = 0.0
     logger.info("Polling %s%s", bridge.base_url, bridge.state_path)
     try:
         while True:
@@ -306,42 +353,303 @@ def main() -> None:
             # Everything below can hit unexpected game state. Guard it so one bad
             # screen logs + shows a friendly note instead of killing the advisor.
             try:
-                # 2. New-run detection -> reset thesis + warm sessions + seed deck.
-                if tracker.is_new_run(state):
-                    logger.info("New run detected -> resetting thesis + seeding deck.")
-                    thesis_store.reset(tracker.run_key(state))
+                # Mode is read from STS2MCP when available. If its API omits it,
+                # the optional user override can be used for Blitz/Dread.
+                mode_override = str(cfg.get('game', {}).get('mode_override', 'auto'))
+                live_mode = beta_compat.mode_from_state(state, mode_override)
+                if live_mode != 'unknown' and isinstance(state.get('run'), dict):
+                    state['run']['game_mode'] = live_mode
+                # 2. Durable run identity. Do not reset on a same-floor restart.
+                previous_run_id = journal.run_id
+                new_run = journal.observe(state)
+                if new_run:
+                    # First install while already in a run must not overwrite
+                    # the player's real deck/thesis with a starter guess.
+                    mid_run_migration = (previous_run_id is None and
+                        isinstance((state.get('run') or {}).get('floor'), int) and
+                        (state.get('run') or {}).get('floor') > 1)
+                    if mid_run_migration:
+                        logger.info("Adopting existing mid-run deck/thesis under %s", journal.run_id)
+                        thesis_store.run_key = journal.run_id
+                        thesis_store.save()
+                    else:
+                        logger.info("New run %s: resetting thesis + seeding deck.", journal.run_id)
+                        thesis_store.reset(journal.run_id)
+                        deck.seed_starter(RunTracker._character(state))
                     model.reset_sessions()
                     debouncer.reset()
-                    deck.seed_starter(RunTracker._character(state))
+                    combat_debounce.reset()
+                    orb_stabilizer.reset()
+                    adv_worker.invalidate(None)
+                    current_fight = None
+                    combat_requests = 0
+                if journal.accept_build_choice():
+                    # Selecting a build must immediately release the advisor,
+                    # even if a previous model call has not completed yet.
+                    build_pending_sig = None
+                    debouncer.reset()
+                    adv_worker.invalidate(None)
+                    last_state_sig = None
+                journal.note_observation(state)
 
-                # Run end: announce victory/defeat once, then reset for the next run.
                 if state.get("state_type") == "game_over" or state.get("game_over"):
                     if not game_over_handled:
                         msg = _game_over_message(state)
                         util.resolve(cfg["paths"]["advice_file"]).write_text(
                             msg + "\n", encoding="utf-8")
                         logger.info("Run ended: %s", msg.splitlines()[0])
-                        thesis_store.reset()
-                        model.reset_sessions()
+                        journal.finish(msg.splitlines()[0])
+                        adv_worker.invalidate(None)
                         debouncer.reset()
                         game_over_handled = True
+                    atomic_json(combat_status_path, {"status": "inactive", "run_id": journal.run_id})
                     time.sleep(poll)
                     continue
                 game_over_handled = False
 
-                # Snapshot the deck whenever combat piles are visible (the only time
-                # STS2MCP exposes the deck); reused on the next decision screen.
+                # Continue collecting deck and run observations even while
+                # paused, but never request or display new recommendations.
                 deck.maybe_snapshot(state)
-
-                # 3. Classify screen.
-                kind, is_decision = screens.classify(state)
-                if not is_decision:
-                    # combat / transition / menu -> stay silent.
+                paused, battle_paused = pause_gate.flags()
+                if paused != was_paused:
+                    adv_worker.invalidate(None)  # discard any in-flight advice
+                    debouncer.reset()
+                    combat_debounce.reset()
+                    last_state_sig = None
+                    build_pending_sig = None
+                    was_paused = paused
+                    logger.info('All suggestions %s.', 'paused' if paused else 'resumed')
+                    if not paused:
+                        util.resolve(cfg['paths']['advice_file']).write_text(
+                            'Resuming. Rechecking current state…\n', encoding='utf-8')
+                if battle_paused != was_battle_paused:
+                    # Only invalidate a live combat job. Never cancel a map,
+                    # event, shop or card selection when toggling battle pause.
+                    on_battle = control.is_combat_screen(state)
+                    if on_battle:
+                        adv_worker.invalidate(None)
+                        combat_debounce.reset()
+                        last_state_sig = None
+                    was_battle_paused = battle_paused
+                    logger.info('Battle suggestions %s.',
+                                'paused' if battle_paused else 'resumed')
+                if paused:
+                    atomic_json(combat_status_path, {
+                        'status': 'paused', 'run_id': journal.run_id})
+                    time.sleep(poll)
+                    continue
+                cancelled = read_json(journal.cancel_path)
+                if (build_pending_sig and cancelled.get('run_id') == journal.run_id and
+                        cancelled.get('request_id') == build_pending_sig.split(':')[-1]):
+                    build_pending_sig = None
+                    adv_worker.invalidate(None)
+                    last_state_sig = None
+                    logger.info('Build suggestion cancelled by player. Continuing normal coaching.')
+                build_req = journal.build_request()
+                if build_req:
+                    requested_character = build_catalog.normalize_character(build_req.get('character'))
+                    actual_character = build_catalog.normalize_character(journal.active.get('character'))
+                    character = actual_character if actual_character != 'Unknown' else requested_character
+                    opts = candidates(character)
+                    if not opts:
+                        logger.warning('Build recommendation needs a character; skipping request.')
+                        journal.record_suggestion({
+                            'run_id': journal.run_id, 'request_id': build_req['request_id'],
+                            'status': 'error', 'build': '', 'why': 'Select your character first.'})
+                        time.sleep(poll)
+                        continue
+                    start_state = {
+                        "character": character,
+                        "ascension": journal.active.get("ascension"),
+                        "act": (state.get("run") or {}).get("act"),
+                        "floor": (state.get("run") or {}).get("floor"),
+                        "current_screen": state.get("state_type"),
+                        "available_options": screens.extract_options(state, "event")
+                            if state.get("state_type") == "event" else
+                            screens.extract_options(state, state.get("state_type") or ""),
+                        "owned_relics": (state.get("player") or {}).get("relics") or [],
+                    }
+                    payload = ("Suggest a starting strategic BUILD for this StS2 run, before "
+                               "the first Ancient blessing or relic pick if possible. "
+                               "Choose EXACTLY from these options:\n" +
+                               build_catalog.details_for_prompt(character) +
+                               "\nExisting five-character tiers come from v0.107.1 editorial guides and may be outdated on v0.113.0; The Fool build options are UNRANKED. "
+                               "Do not demand an unavailable rare card. "
+                               "If no reliable starting information is available choose Flexible / adapt to rewards.\n"
+                               "CURRENT STATE:\n" + json.dumps(start_state, default=str) +
+                               "\n\n=== BETA PATCH / GAME MODE ===\n" +
+                               beta_compat.contextual_advice(state) +
+                               "\nFormat PICK: <exact option> and WHY: <short sentence>.")
+                    req_sig = "build:" + journal.run_id + ":" + build_req["request_id"]
+                    adv_worker.request(req_sig, payload, model.model_for("build"),
+                                       "build", run_id=journal.run_id, build_options=opts)
+                    # The bridge pauses ordinary advice while Claude recommends a build.
+                    # If a player advances anyway, advice resumes after the next poll.
+                    last_state_sig = req_sig
+                    build_pending_sig = req_sig
+                    build_pending_at = time.monotonic()
                     time.sleep(poll)
                     continue
 
-                # 4. Debounce + de-dupe.
+                # Keep the build proposal alive until it completes or times out.
+                if build_pending_sig is not None:
+                    suggestion = read_json(journal.suggestion_path)
+                    if (suggestion.get('run_id') == journal.run_id and
+                            suggestion.get('request_id') == build_pending_sig.split(':')[-1]):
+                        build_pending_sig = None
+                        last_state_sig = None
+                    elif time.monotonic() - build_pending_at < 55:
+                        time.sleep(poll)
+                        continue
+                    else:
+                        logger.warning('Build recommendation timed out; resuming normal coaching.')
+                        journal.record_suggestion({
+                            'run_id': journal.run_id,
+                            'request_id': build_pending_sig.split(':')[-1],
+                            'status': 'timeout', 'build': '',
+                            'why': 'Claude took too long. Choose a build directly or retry.'})
+                        build_pending_sig = None
+                        adv_worker.invalidate(None)
+                        last_state_sig = None
+
+                # 3. Combat uses a separate, instantly invalidated plan. Card
+                # effects change the signature and force a fresh legal-action check.
+                is_battle_screen = control.is_combat_screen(state)
+                if battle_paused and is_battle_screen and not state.get('battle'):
+                    # MCP sometimes identifies the encounter before its full
+                    # battle snapshot is ready. This is still a paused battle,
+                    # not a non-combat decision for the general advisor.
+                    adv_worker.invalidate(None)
+                    run = state.get('run') or {}
+                    player = state.get('player') or {}
+                    atomic_json(combat_status_path, {
+                        'status': 'paused_battle', 'run_id': journal.run_id,
+                        'act': run.get('act'), 'floor': run.get('floor'),
+                        'round': '?', 'hp': player.get('hp'),
+                        'max_hp': player.get('max_hp'), 'block': player.get('block'),
+                        'energy': player.get('energy'),
+                        'max_energy': player.get('max_energy'),
+                        'enemies': [], 'orbs': {},
+                    })
+                    time.sleep(poll)
+                    continue
+                if combat_enabled and is_battle_screen and bool(state.get('battle')):
+                    sig = "combat:" + combat.digest(state)
+                    round_no = (state.get("battle") or {}).get("round")
+                    fight_key = ((state.get("run") or {}).get("act"),
+                                 (state.get("run") or {}).get("floor"),
+                                 state.get("state_type"), round_no)
+                    if current_fight is None or current_fight[:3] != fight_key[:3]:
+                        current_fight = fight_key
+                        combat_requests = 0
+                        orb_stabilizer.reset()
+                        if battle_paused:
+                            logger.info('New encounter: battle pause remains ON; no combat model requests.')
+                        found = reference.encounter(state)
+                        logger.info('Encounter reference: %d/%d enemies matched (sheet v%s): %s',
+                                    sum(f['reference'] is not None for f in found),
+                                    len(found), reference.source_version,
+                                    ', '.join(str(f['live_name']) for f in found))
+                    # Stabilize the orb queue independently of the rest of the
+                    # battle. Never ask Claude to act on one disputed orb read.
+                    raw_orbs = (state.get('player') or {}).get('orbs')
+                    orb_verified = orb_stabilizer.observe(raw_orbs)
+                    if orb_verified:
+                        orb_unstable_since = None
+                    else:
+                        now_orb = time.monotonic()
+                        if orb_unstable_since is None:
+                            orb_unstable_since = now_orb
+                        if (now_orb - orb_unstable_since >= 3.0 and
+                                now_orb - orb_last_warning >= 15.0):
+                            logger.warning(
+                                'Orb state unstable (%s); confirmed=%s; observed=%s',
+                                orb_stabilizer.pending_reason,
+                                [o.get('id') or o.get('name') for o in orb_stabilizer.confirmed],
+                                ([o.get('id') or o.get('name') for o in raw_orbs]
+                                 if isinstance(raw_orbs, list) else None))
+                            orb_last_warning = now_orb
+                    verified_state = orb_stabilizer.stable_state(state)
+                    sig = 'combat:' + combat.digest(verified_state)
+                    if last_state_sig != sig or not orb_verified:
+                        adv_worker.invalidate(sig)
+                        last_state_sig = sig
+                    if not orb_verified:
+                        # Invalidate any prior advice immediately, including if
+                        # an oscillating orb queue returns the same digest.
+                        adv_worker.invalidate(None)
+                        last_state_sig = None
+                        combat_debounce.reset()
+                    can_advise = combat.active(state)
+                    combat_limit = combat_requests >= combat_max
+                    found = reference.encounter(state)
+                    atomic_json(combat_status_path, {
+                        **combat.summary(verified_state, sig, journal.run_id),
+                        'orb_read_stable': orb_verified,
+                        'reference_matched': sum(f['reference'] is not None for f in found),
+                        'reference_total': len(found),
+                        'reference_version': reference.source_version,
+                        "status": "paused_battle" if battle_paused else
+                                  "waiting" if not orb_verified or not can_advise else
+                                  "limit" if combat_limit else "active",
+                        "remaining_requests": max(0, combat_max - combat_requests),
+                    })
+                    if battle_paused or not orb_verified or not can_advise or combat_limit:
+                        time.sleep(poll)
+                        continue
+                    combat_debounce.observe(sig)
+                    now = time.monotonic()
+                    if (combat_debounce.should_fire(sig) and
+                            now - last_combat_call >= combat_interval and
+                            combat_requests < combat_max):
+                        payload = combat.prompt(
+                            verified_state, thesis_store.format_for_prompt(),
+                            journal.format_for_prompt(4, 1200), journal.build,
+                            reference_text=(reference.prompt_for_battle(state) +
+                              '\n\n=== V0.113.0 BETA PATCH ===\n' + beta_compat.contextual_advice(state)))
+                        if adv_worker.request(sig, payload, model.model_for("combat"),
+                                              "combat", run_id=journal.run_id, state=verified_state):
+                            combat_debounce.mark_fired(sig)
+                            last_combat_call = now
+                            combat_requests += 1
+                    time.sleep(poll)
+                    continue
+                atomic_json(combat_status_path, {"status": "inactive", "run_id": journal.run_id})
+                current_fight = None
+                orb_stabilizer.reset()
+                orb_unstable_since = None
+                combat_requests = 0
+                combat_debounce.reset()
+
+                # 4. Non-combat decision: old advice must not leak to a new screen.
+                kind, is_decision = screens.classify(state)
+                if not is_decision:
+                    if last_state_sig is not None:
+                        adv_worker.invalidate(None)
+                        last_state_sig = None
+                        util.resolve(cfg["paths"]["advice_file"]).write_text(
+                            "Waiting for the next decision screen...\n", encoding="utf-8")
+                    time.sleep(poll)
+                    continue
                 sig = signature.build(state, kind)
+                # The full map remains visible, but if STS2MCP exposes only a
+                # single reachable node there is no choice to recommend.
+                # Skip the model entirely and invalidate prior map advice.
+                automatic_map = screens.automatic_map_message(state) if kind == 'map' else None
+                if automatic_map is not None:
+                    if last_state_sig != sig:
+                        adv_worker.invalidate(None)
+                        last_state_sig = sig
+                        debouncer.reset()
+                        util.resolve(cfg['paths']['advice_file']).write_text(
+                            automatic_map + '\n', encoding='utf-8')
+                        logger.info('Map has %d available route(s); skipping model advice.',
+                                    len((state.get('map') or {}).get('next_options') or []))
+                    time.sleep(poll)
+                    continue
+                if last_state_sig != sig:
+                    adv_worker.invalidate(sig)
+                    last_state_sig = sig
                 debouncer.observe(sig)
                 if debouncer.should_fire(sig):
                     m_kind = screens.model_kind(state, kind)
@@ -350,11 +658,25 @@ def main() -> None:
                         state, kind, dataset, thesis_store.format_for_prompt(),
                         deck_cards=deck.cards,
                         deck_source=deck.source_with_staleness((state.get("run") or {}).get("floor")))
+                    reference_excerpt = library.context_for_screen(state, kind)
+                    if reference_excerpt:
+                        payload += "\n\n=== IMPORTED REFERENCE EXCERPTS ===\n" + reference_excerpt
+                    payload += '\n\n=== OFFICIAL V0.113.0 GAME PATCH ===\n' + beta_compat.contextual_advice(state)
+                    payload += ("\n\n=== PERSISTENT RUN JOURNAL ===\n" +
+                                journal.format_for_prompt(cfg.get("memory", {}).get("recent_events", 10)))
                     if log_prompts:
                         logger.info("PROMPT [%s -> %s]:\n%s", kind, alias, payload)
                     logger.info("Firing advice: %s (model=%s, sig=%s)", kind, alias, sig)
-                    adv_worker.request(sig, payload, alias, kind)
+                    adv_worker.request(sig, payload, alias, kind, run_id=journal.run_id)
                     debouncer.mark_fired(sig)
+            except PermissionError as exc:
+                # OneDrive/AV can briefly hold the run-journal path. Do not
+                # replace valid advice with a generic error for a recoverable
+                # Windows file-lock failure. The next poll retries the save.
+                logger.warning('Temporary runtime file access failure; retrying: %s', exc)
+                adv_worker.invalidate(None)
+                combat_debounce.reset()
+                last_state_sig = None
             except Exception:  # noqa: BLE001 - keep the advisor alive on any bad state
                 logger.exception("Error processing state (state_type=%s)",
                                  state.get("state_type"))
@@ -371,6 +693,7 @@ def main() -> None:
     finally:
         adv_worker.stop()
         model.shutdown()
+        instance_guard.close()
         try:
             heartbeat_path.unlink()  # signal overlay to close
         except OSError:

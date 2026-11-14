@@ -10,7 +10,7 @@ import json
 import re
 import string
 
-from . import screens, util
+from . import screens, util, beta_compat
 
 _STRIP_PREFIXES = ("card_", "relic_", "power_", "potion_")
 _PUNCT = str.maketrans("", "", string.punctuation)
@@ -187,7 +187,7 @@ def _run_summary(state: dict, ds: Dataset) -> str:
     potions = ", ".join(p.get("name") for p in player.get("potions", [])
                         if p.get("name") and p.get("name") != "Empty") or "none"
     head = (
-        f"Character: {character} | Act {run.get('act', '?')} "
+        f"Character: {character} | Mode: {beta_compat.mode_from_state(state)} | Act {run.get('act', '?')} "
         f"Floor {run.get('floor', '?')} | Ascension {run.get('ascension', 0)}\n"
         f"HP: {hp}/{max_hp}"
         + (f" | Block: {block}" if block else "")
