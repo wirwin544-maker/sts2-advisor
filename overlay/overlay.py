@@ -96,7 +96,9 @@ def work_area(root: tk.Tk) -> tuple[int, int, int, int]:
 def format_combat(status: dict, plan: dict) -> str:
     if status.get('status') not in ('active', 'waiting', 'limit'):
         return ''
-    head = (f"ACT {status.get('act', '?')}  F{status.get('floor', '?')}  "
+    mode_name = str(status.get('game_mode', '') or '').upper()
+    mode_label = f"  MODE {mode_name}" if mode_name not in ('', 'UNKNOWN') else ''
+    head = (f"ACT {status.get('act', '?')}  F{status.get('floor', '?')}{mode_label}  "
             f"ROUND {status.get('round', '?')}\n"
             f"HP {status.get('hp', '?')}/{status.get('max_hp', '?')}  "
             f"BLOCK {status.get('block', '?')}  "
@@ -397,7 +399,7 @@ class Overlay:
         self._build_dialog = popup
         self._build_pending = None
         self._build_character_manual = False
-        popup.title('Choose a run strategy - v0.107.1 rankings')
+        popup.title('Choose a run strategy - beta v0.113.0')
         popup.configure(bg='#151a23')
         popup.attributes('-topmost', True)
         area = self._area or work_area(self.root)
@@ -424,8 +426,8 @@ class Overlay:
                  font=('Consolas', 15, 'bold')).pack(side='left')
         tk.Label(heading, text=f"Act {data.get('act') or '?'}",
                  bg='#151a23', fg='#acbccc', font=('Consolas', 11)).pack(side='right')
-        tk.Label(popup, text=('Rankings are editorial for StS2 v0.107.1. '
-                'Builds are directions, not guaranteed deck lists. Click one to select it.'),
+        tk.Label(popup, text=('Existing tiers are historical v0.107.1 editorial rankings. '
+                'The Fool has unranked beta v0.113.0 strategies. Click one to select it.'),
                 bg='#151a23', fg='#cbd2dc', wraplength=pw-30,
                 justify='left').pack(fill='x', padx=16, pady=(0, 9))
 

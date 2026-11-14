@@ -10,7 +10,7 @@ import json
 import re
 from pathlib import Path
 
-from . import screens
+from . import screens, beta_compat
 
 
 def _plain(value) -> str:
@@ -93,6 +93,7 @@ class ReferenceLibrary:
                 snippets.append(excerpt)
         if not snippets:
             return ''
-        return (f'SPREADSHEET REFERENCE v{self.version} (historical; may not match live game):\n'
+        return (f'SPREADSHEET REFERENCE v{self.version} (historical; may not match v0.113.0 beta):\n'
                 + '\n'.join(snippets)
+                + '\nOFFICIAL V0.113.0 PATCH UPDATES: ' + '; '.join(beta_compat.relevant_patch_facts(state, 5))
                 + '\nPrefer live game state for prices, lock status, current options and effects.')

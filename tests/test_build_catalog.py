@@ -22,12 +22,15 @@ class BuildCatalogTests(unittest.TestCase):
         self.assertEqual(build_catalog.from_state({'run': {'character_id': 'THE_DEFECT'}}), 'Defect')
         self.assertEqual(build_catalog.from_state({'player': {}}), 'Unknown')
 
-    def test_all_five_classes_have_clickable_guides_with_versioned_ranks(self):
-        self.assertEqual(build_catalog.catalog()['version'], 'v0.107.1')
+    def test_all_six_classes_have_clickable_beta_guides(self):
+        self.assertEqual(build_catalog.catalog()['version'], 'v0.113.0-beta')
         for name in build_catalog.CHARACTERS:
             items = build_catalog.entries(name)
-            self.assertGreaterEqual(len(items), 5)
-            self.assertTrue(any(x.get('tier') == 'S' for x in items))
+            self.assertGreaterEqual(len(items), 4)
+            if name == 'Fool':
+                self.assertTrue(any(x.get('tier') == 'Unranked' for x in items))
+            else:
+                self.assertTrue(any(x.get('tier') == 'S' for x in items))
             self.assertEqual(candidates(name), [x['name'] for x in items])
             for row in items:
                 self.assertTrue(row['url'].startswith('https://'))

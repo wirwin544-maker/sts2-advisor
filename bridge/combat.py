@@ -11,6 +11,7 @@ import json
 import re
 from copy import deepcopy
 from .run_memory import atomic_json
+from . import beta_compat
 
 COMBAT_KINDS = {'monster', 'elite', 'boss', 'hand_select'}
 
@@ -227,6 +228,7 @@ def summary(state: dict, sig: str, run_id: str | None) -> dict:
     p, b, r = state.get('player') or {}, state.get('battle') or {}, state.get('run') or {}
     return {
         'run_id': run_id, 'signature': sig, 'screen': state.get('state_type'),
+        'game_mode': beta_compat.mode_from_state(state),
         'act': r.get('act'), 'floor': r.get('floor'), 'round': b.get('round'),
         'hp': p.get('hp'), 'max_hp': p.get('max_hp'), 'block': p.get('block'),
         'energy': p.get('energy'), 'max_energy': p.get('max_energy'),

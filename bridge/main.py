@@ -18,7 +18,7 @@ from . import combat, control, grounding, screens, signature, thesis, util, work
 from .monster_reference import MonsterReference
 from .reference_search import ReferenceLibrary
 from .run_memory import RunJournal, atomic_json, candidates, read_json
-from . import build_catalog
+from . import build_catalog, beta_compat
 from .model_client import ModelClient
 
 
@@ -259,7 +259,7 @@ def main() -> None:
         print('Spire Oracle bridge is already running; declining duplicate start.')
         return
     logger = util.setup_logging(cfg["paths"]["log_file"])
-    logger.info("StS2 Advisor starting.")
+    logger.info("StS2 Advisor starting. Beta-target compatibility: v%s, build %s (runtime still requires STS2MCP rebuild).", beta_compat.TARGET_VERSION, beta_compat.STEAM_BUILD_ID)
 
     dataset = grounding.Dataset.load(cfg["paths"]["data_dir"])
     reference = MonsterReference.load(util.resolve(
@@ -350,6 +350,12 @@ def main() -> None:
             # Everything below can hit unexpected game state. Guard it so one bad
             # screen logs + shows a friendly note instead of killing the advisor.
             try:
+                # Mode is read from STS2MCP when available. If its API omits it,
+                # the optional user override can be used for Blitz/Dread.
+                mode_override = str(cfg.get('game', {}).get('mode_override', 'auto'))
+                live_mode = beta_compat.mode_from_state(state, mode_override)
+                if live_mode != 'unknown' and isinstance(state.get('run'), dict):
+                    state['run']['game_mode'] = live_mode
                 # 2. Durable run identity. Do not reset on a same-floor restart.
                 previous_run_id = journal.run_id
                 new_run = journal.observe(state)
@@ -453,10 +459,12 @@ def main() -> None:
                                "the first Ancient blessing or relic pick if possible. "
                                "Choose EXACTLY from these options:\n" +
                                build_catalog.details_for_prompt(character) +
-                               "\nReference source uses v0.107.1 editorial tiers, not verified win-rates. "
+                               "\nExisting five-character tiers come from v0.107.1 editorial guides and may be outdated on v0.113.0; The Fool build options are UNRANKED. "
                                "Do not demand an unavailable rare card. "
                                "If no reliable starting information is available choose Flexible / adapt to rewards.\n"
                                "CURRENT STATE:\n" + json.dumps(start_state, default=str) +
+                               "\n\n=== BETA PATCH / GAME MODE ===\n" +
+                               beta_compat.contextual_advice(state) +
                                "\nFormat PICK: <exact option> and WHY: <short sentence>.")
                     req_sig = "build:" + journal.run_id + ":" + build_req["request_id"]
                     adv_worker.request(req_sig, payload, model.model_for("build"),
@@ -563,7 +571,8 @@ def main() -> None:
                         payload = combat.prompt(
                             verified_state, thesis_store.format_for_prompt(),
                             journal.format_for_prompt(4, 1200), journal.build,
-                            reference_text=reference.prompt_for_battle(state))
+                            reference_text=(reference.prompt_for_battle(state) +
+                              '\n\n=== V0.113.0 BETA PATCH ===\n' + beta_compat.contextual_advice(state)))
                         adv_worker.request(sig, payload, model.model_for("combat"),
                                            "combat", run_id=journal.run_id, state=verified_state)
                         combat_debounce.mark_fired(sig)
@@ -603,6 +612,7 @@ def main() -> None:
                     reference_excerpt = library.context_for_screen(state, kind)
                     if reference_excerpt:
                         payload += "\n\n=== IMPORTED REFERENCE EXCERPTS ===\n" + reference_excerpt
+                    payload += '\n\n=== OFFICIAL V0.113.0 GAME PATCH ===\n' + beta_compat.contextual_advice(state)
                     payload += ("\n\n=== PERSISTENT RUN JOURNAL ===\n" +
                                 journal.format_for_prompt(cfg.get("memory", {}).get("recent_events", 10)))
                     if log_prompts:

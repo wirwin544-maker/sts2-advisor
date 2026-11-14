@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 from . import util
-from . import build_catalog
+from . import build_catalog, beta_compat
 
 # Deprecated labels remain accepted when a run predates the curated catalog.
 LEGACY_NAMES = {
@@ -107,7 +107,7 @@ class RunJournal:
         atomic_json(self.status_path, {
             'run_id': self.run_id, 'character': self.active.get('character'),
             'ascension': self.active.get('ascension'), 'act': self.active.get('act'),
-            'floor': self.active.get('floor'), 'build': self.build,
+            'floor': self.active.get('floor'), 'game_mode': self.active.get('game_mode', 'unknown'), 'build': self.build,
             'build_options': candidates(self.active.get('character', '')),
             'created_at': self.active.get('created_at'),
             'status': self.active.get('status', 'active'),
@@ -142,6 +142,9 @@ class RunJournal:
         # missing fields as a new identity, or erase a manually selected build.
         char = detected_char if detected_char != 'Unknown' else previous_char
         asc = run.get('ascension')
+        current_mode = beta_compat.mode_from_state(state)
+        if current_mode == 'unknown':
+            current_mode = prev.get('game_mode', 'unknown')
         if (prev.get('character_source') == 'manual' and
                 previous_char != 'Unknown' and detected_char != 'Unknown'):
             # A real character from MCP overrides the player's temporary
@@ -157,7 +160,10 @@ class RunJournal:
         new = not prev.get('run_id') or prev.get('status') == 'ended'
         if prev and not new:
             if (previous_char != 'Unknown' and char != 'Unknown' and
-                    previous_char != char) or prev.get('ascension') != asc:
+                    previous_char != char) or prev.get('ascension') != asc or (
+                    prev.get('game_mode') not in (None, 'unknown') and
+                    current_mode not in (None, 'unknown') and
+                    prev.get('game_mode') != current_mode):
                 new = True
             elif (floor <= 1 and act == 1 and isinstance(prev.get('floor'), int)
                   and prev['floor'] > floor):
@@ -168,7 +174,7 @@ class RunJournal:
         if new:
             self.active = {
                 'run_id': str(uuid.uuid4()), 'character': char, 'ascension': asc,
-                'floor': floor, 'act': act, 'status': 'active',
+                'floor': floor, 'act': act, 'game_mode': current_mode, 'status': 'active',
                 'build': '', 'created_at': time.time(),
             }
             self._last_event_key = None
@@ -182,9 +188,12 @@ class RunJournal:
                     pass
             return True
 
-        changed = (prev.get('floor') != floor or prev.get('act') != act)
+        changed = (prev.get('floor') != floor or prev.get('act') != act or
+                   (current_mode != 'unknown' and prev.get('game_mode') != current_mode))
         if changed or (previous_char == 'Unknown' and char != 'Unknown'):
             self.active['floor'], self.active['act'] = floor, act
+            if current_mode != 'unknown':
+                self.active['game_mode'] = current_mode
             if previous_char == 'Unknown' and char != 'Unknown':
                 self.active['character'] = char
             self._save_active()

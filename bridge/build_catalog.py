@@ -9,7 +9,7 @@ import re
 from functools import lru_cache
 from . import util
 
-CHARACTERS = ('Ironclad', 'Silent', 'Defect', 'Regent', 'Necrobinder')
+CHARACTERS = ('Ironclad', 'Silent', 'Defect', 'Regent', 'Necrobinder', 'Fool')
 
 
 def normalize_character(value) -> str:

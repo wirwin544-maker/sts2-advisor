@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from .beta_compat import monster_patch
 from pathlib import Path
 
 
@@ -69,13 +70,16 @@ class MonsterReference:
             if entry is None:
                 parts.append(f'Enemy {name!r}: no exact unambiguous reference match. Do not guess.')
                 continue
+            override = monster_patch(name)
             lines = [f'Enemy {name!r} [{entry.get("kind")}]; reference HP {entry.get("hp")}']
-            for move in entry.get('moves', []):
+            if override:
+                lines.append('V0.113.0 OFFICIAL PATCH OVERRIDE (supersedes contradictory spreadsheet rows): ' + override)
+            for move in ([] if 'infested prism' in str(name).casefold() else entry.get('moves', [])):
                 details = '; '.join(move.get('details') or [])
                 lines.append(f'- {move.get("name")}: {details}' if details else f'- {move.get("name")}')
-            if entry.get('patterns'):
+            if entry.get('patterns') and not 'infested prism' in str(name).casefold():
                 lines.append('PATTERN: ' + ' '.join(entry['patterns']))
-            if entry.get('notes'):
+            if entry.get('notes') and not 'infested prism' in str(name).casefold():
                 lines.append('NOTES: ' + ' '.join(entry['notes']))
             item = '\n'.join(lines)
             if sum(map(len, parts)) + len(item) > max_chars:

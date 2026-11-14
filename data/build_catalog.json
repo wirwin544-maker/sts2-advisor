@@ -1,11 +1,13 @@
 {
-  "version": "v0.107.1",
-  "ranking_method": "Editorial S-C archetype rankings from slaythespire2.net, not measured win rates. Other sources are secondary, not combined into one numerical rank.",
+  "version": "v0.113.0-beta",
+  "ranking_method": "Existing five-character tiers are historical editorial v0.107.1 rankings and are not re-ranked for v0.113.0. The Fool entries are unranked early beta strategies, NOT measured win-rate or popularity rankings.",
   "checked_on": "2026-11-11",
   "source_urls": [
     "https://slaythespire2.net/build/",
     "https://sts2.gg/builds",
-    "https://spire-codex.com/guides/builds-guide"
+    "https://spire-codex.com/guides/builds-guide",
+    "https://apollotrail.com/blog/slay-the-spire-2-the-fool-beginner-guide-beta-mechanics-first-build",
+    "https://dood.gg/en/slay-the-spire-2/fool/"
   ],
   "characters": {
     "ironclad": [
@@ -381,6 +383,51 @@
         "url": "https://slaythespire2.net/build/necrobinder",
         "secondary_url": "https://sts2.gg/builds",
         "source": "slaythespire2.net v0.107.1 editorial"
+      }
+    ],
+    "fool": [
+      {
+        "name": "Flexible / adapt to rewards",
+        "tier": "Flexible",
+        "description": "Choose by actual available cards; The Fool is new to beta and does not have verified win-rate rankings.",
+        "core_cards": [],
+        "url": "https://apollotrail.com/blog/slay-the-spire-2-the-fool-beginner-guide-beta-mechanics-first-build",
+        "secondary_url": "https://dood.gg/en/slay-the-spire-2/fool/",
+        "source": "Unranked v0.113.0 beta starter choice"
+      },
+      {
+        "name": "Aim / Arrow shots",
+        "tier": "Unranked",
+        "description": "Accumulate Aim, fire available Arrows, use low-cost attacks to free the Arrow from Impaled enemies.",
+        "core_cards": [
+          "Foolish Shot",
+          "Nock",
+          "Heavy Shot"
+        ],
+        "url": "https://apollotrail.com/blog/slay-the-spire-2-the-fool-beginner-guide-beta-mechanics-first-build",
+        "secondary_url": "https://dood.gg/en/slay-the-spire-2/fool/",
+        "source": "v0.113.0 beta community guide, not measured ranking"
+      },
+      {
+        "name": "Impale / Dislodge",
+        "tier": "Unranked",
+        "description": "Cycle Arrow shots through Impaled targets and repeat the dislodge sequence. Confirm current Arrow count before attempting a Shot.",
+        "core_cards": [
+          "Foolish Shot",
+          "Recall"
+        ],
+        "url": "https://dood.gg/en/slay-the-spire-2/fool/",
+        "secondary_url": "https://apollotrail.com/blog/slay-the-spire-2-the-fool-beginner-guide-beta-mechanics-first-build",
+        "source": "v0.113.0 beta mechanic archetype"
+      },
+      {
+        "name": "Melodies",
+        "tier": "Unranked",
+        "description": "Prioritize reliable Wah/Cho/Ki Melody triggers when those cards appear. Do not assume those cards are already in the deck.",
+        "core_cards": [],
+        "url": "https://dood.gg/en/slay-the-spire-2/fool/",
+        "secondary_url": "https://apollotrail.com/blog/slay-the-spire-2-the-fool-beginner-guide-beta-mechanics-first-build",
+        "source": "v0.113.0 beta mechanic archetype"
       }
     ]
   }

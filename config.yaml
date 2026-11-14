@@ -4,9 +4,6 @@
 # =============================================================================
 
 bridge:
-  # Prevent two Oracle bridge processes from polling and writing the same
-  # runtime files (e.g. start.bat plus Windows autostart).
-  instance_port: 15581
   # STS2MCP exposes its REST API here. Port is set in STS2_MCP.conf in the mod
   # folder (default 15526). The advisor ONLY issues GET reads — never POST.
   base_url: "http://127.0.0.1:15526"
@@ -105,14 +102,10 @@ paths:
   combat_plan_file: "runtime/combat_plan.json"     # model plan tied to a state hash
   run_status_file: "runtime/run_status.json"
   control_file: "runtime/control.json"              # Pause/Resume flag shared with overlay
-  claude_usage_file: "runtime/claude_usage.json"     # Authenticated Claude Code statusLine snapshot
   monster_reference_file: "data/monster_moves.json" # Generated from user's XLSX
   reference_cache_file: "data/reference_cache.json" # All imported spreadsheet worksheets
 
 combat:
-  # Require three matching 0.3s orb samples before trusting a changed queue.
-  # Pauses orb-dependent advice while channel/evoke animations settle.
-  orb_confirmation_polls: 3
   enabled: true
   settle_s: 0.65                    # wait for animations/state to settle
   min_request_interval_s: 4.0     # Claude Pro usage protection, seconds
@@ -151,3 +144,8 @@ dev:
   sample_state_file: "data/sample_state.json"
   # Log the full prompt sent to the model (verbose).
   log_prompts: false
+
+# PUBLIC BETA v0.113.0 support. Leave auto if STS2MCP reports the game mode.
+game:
+  target_version: '0.113.0'
+  mode_override: 'auto'  # auto, standard, blitz, dread
