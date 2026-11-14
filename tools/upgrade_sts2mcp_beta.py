@@ -23,6 +23,8 @@ from urllib.request import urlopen
 
 from .fix_sts2mcp_shop import (patch_source, migrate_legacy_backups,
                                assert_single_state_builder, PatchMismatch)
+from .beta113_mcp_api import (patch_all as patch_beta_api, HELPER as COMPAT_HELPER,
+                              HELPER_FILE as COMPAT_FILE)
 
 GAME_DIR = Path(r'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2')
 BASE_SOURCE = Path.home() / 'STS2MCP-v107'
@@ -97,7 +99,8 @@ def check_api(base_url: str = 'http://127.0.0.1:15526') -> int:
 
 
 def validate_source(source: Path, game: Path, require_dll: bool = True) -> None:
-    expected = [source / 'McpMod.StateBuilder.cs', source / 'build.ps1',
+    expected = [source / 'McpMod.StateBuilder.cs', source / 'McpMod.Actions.cs',
+                source / 'STS2_MCP.csproj', source / 'build.ps1',
                 game / 'data_sts2_windows_x86_64' / 'sts2.dll']
     if require_dll:
         expected.append(game / 'mods' / 'STS2_MCP.dll')
@@ -113,8 +116,17 @@ def build_and_install(source: Path, game: Path, *, dry_run: bool = False,
     game = game.expanduser().resolve()
     validate_source(source, game)
     src = source / 'McpMod.StateBuilder.cs'
+    actions_path = source / 'McpMod.Actions.cs'
+    helper_path = source / COMPAT_FILE
     old_source = src.read_text(encoding='utf-8')
-    patched, changes = patch_beta_source(old_source)
+    old_actions = actions_path.read_text(encoding='utf-8')
+    old_helper = helper_path.read_bytes() if helper_path.exists() else None
+    shop_patched, changes = patch_beta_source(old_source)
+    patched, actions_patched, compatibility = patch_beta_api(shop_patched, old_actions)
+    changes.update(compatibility)
+    if old_helper is not None and old_helper.decode('utf-8-sig') != COMPAT_HELPER:
+        raise PatchMismatch(f'Existing {COMPAT_FILE} does not match the expected compatibility helper. '
+                            'Refusing to overwrite local C# changes.')
     ver = steam_build_id(game)
     print('Steam build:', ver or 'appmanifest unavailable',
           '| Expected Nov 12 beta:', EXPECTED_BUILD)
@@ -134,12 +146,17 @@ def build_and_install(source: Path, game: Path, *, dry_run: bool = False,
     backup.mkdir(parents=True, exist_ok=False)
     previous_dll = game / 'mods' / 'STS2_MCP.dll'
     shutil.copy2(src, backup / 'McpMod.StateBuilder.cs')
+    shutil.copy2(actions_path, backup / 'McpMod.Actions.cs')
+    if old_helper is not None:
+        (backup / COMPAT_FILE).write_bytes(old_helper)
     shutil.copy2(previous_dll, backup / 'STS2_MCP.dll')
     build_file = backup / 'build.log'
     result_dll = source / 'out' / 'STS2_MCP' / 'STS2_MCP.dll'
     if result_dll.exists():
         result_dll.unlink()  # Never install a stale output after a failed build.
     src.write_text(patched, encoding='utf-8', newline='')
+    actions_path.write_text(actions_patched, encoding='utf-8', newline='')
+    helper_path.write_text(COMPAT_HELPER, encoding='utf-8', newline='')
     command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                '-File', str(source / 'build.ps1'), '-GameDir', str(game)]
     print('Building against current local beta assemblies:', game)
@@ -172,6 +189,11 @@ def build_and_install(source: Path, game: Path, *, dry_run: bool = False,
     finally:
         if not success:
             shutil.copy2(backup / 'McpMod.StateBuilder.cs', src)
+            shutil.copy2(backup / 'McpMod.Actions.cs', actions_path)
+            if old_helper is None:
+                helper_path.unlink(missing_ok=True)
+            else:
+                helper_path.write_bytes(old_helper)
 
 
 def main(argv: list[str] | None = None) -> int:

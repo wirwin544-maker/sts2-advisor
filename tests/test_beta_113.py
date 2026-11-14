@@ -122,25 +122,16 @@ class Beta113OracleTests(unittest.TestCase):
             self.assertEqual(steam_build_id(folder),'26625880')
 
     def test_build_failure_does_not_overwrite_dll_and_restores_source(self):
-        from tools.fix_sts2mcp_shop import NORMAL_START,NORMAL_CALL,FAKE_START,FAKE_CALL
-        raw=(
-            'result["run"] = new Dictionary<string, object?> { ["act"] = 1 };\n'
-            '        // Always include full player data (relics, potions, deck, etc.) on every screen\n'
-            f'                {NORMAL_START}\n'
-            '                var merchUI = NMerchantRoom.Instance;\n'
-            f'                {NORMAL_CALL}\n'
-            '                result["state_type"] = "shop";\n'
-            f'        {FAKE_START}\n'
-            '            var merchantButton = fakeMerchantNode.MerchantButton;\n'
-            f'            {FAKE_CALL}\n'
-            '        // Build shop inventory from the FakeMerchant model\n'
-        )
+        from tests.test_beta113_mcp_api import STATE, ACTIONS
+        raw=STATE
         # test without Windows because runner is injectable
         with tempfile.TemporaryDirectory() as d:
             p=Path(d);src=p/'source';game=p/'steamapps'/'common'/'Slay the Spire 2'
             src.mkdir();(game/'mods').mkdir(parents=True)
             (game/'data_sts2_windows_x86_64').mkdir(parents=True)
             (src/'McpMod.StateBuilder.cs').write_text(raw)
+            (src/'McpMod.Actions.cs').write_text(ACTIONS)
+            (src/'STS2_MCP.csproj').write_text('<Project />')
             (src/'build.ps1').write_text('')
             (game/'mods'/'STS2_MCP.dll').write_bytes(b'OLD')
             (game/'data_sts2_windows_x86_64'/'sts2.dll').write_bytes(b'beta')
@@ -149,6 +140,7 @@ class Beta113OracleTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 build_and_install(src,game,runner=fail)
             self.assertEqual((src/'McpMod.StateBuilder.cs').read_text(),raw)
+            self.assertEqual((src/'McpMod.Actions.cs').read_text(),ACTIONS)
             self.assertEqual((game/'mods'/'STS2_MCP.dll').read_bytes(),b'OLD')
             self.assertTrue(list((p/'source-backups').rglob('build.log')))
 
