@@ -11,10 +11,12 @@ Official patch notes: https://store.steampowered.com/news/app/2868840/view/70891
 ## Windows install, maintaining your local files
 
 1. Save and quit the game and stop all Oracle processes (`stop.bat` in your active Oracle directory).
-2. Extract the update ZIP and run `INSTALL_BETA_ORACLE.bat`. Select your **active `sts2-oracle-enhanced`** directory. The updater requires `data/monster_moves.json` and `data/reference_cache.json` and retains `runtime/`, `config.yaml`, and the original spreadsheet data. It makes a backup outside the installation directory.
-3. Run `INSTALL_BETA_STS2MCP.bat` to compile your source against the current Steam beta assemblies. The helper relocates older in-project C# backups before compilation, retains the shop read-only fix, adds best-effort run-mode reflection and **does not replace the existing DLL if the build fails**.
-4. Launch the game and check that mods are enabled. Run `python -m tools.upgrade_sts2mcp_beta --verify-connection` in your updated Oracle folder to test the API without making game actions. Start Oracle normally.
-5. For Blitz or Dread, if STS2MCP does not expose the mode, set `game.mode_override: blitz` or `dread` in `config.yaml`. Leave `auto` for ordinary runs.
+2. Extract the update ZIP and run **`INSTALL_BETA113.bat`**. Select your **active `sts2-oracle-enhanced`** directory. This one installer applies the Oracle update **and attempts** the STS2MCP rebuild. It requires `data/monster_moves.json` and `data/reference_cache.json` and retains `runtime/`, `config.yaml`, and the original spreadsheet data. It makes a backup outside the installation directory.
+3. If you want two separate operations instead, run `INSTALL_ORACLE_ONLY.bat`, then `INSTALL_BETA_STS2MCP.bat`. The latter compiles against the current Steam beta assemblies. It relocates old in-project C# backups, keeps the shop read-only fix, adds best-effort run-mode reflection, and **does not replace the installed DLL if the build fails**. Do **not** rebuild twice if step 2 succeeded.
+4. Launch the game and check that mods are enabled. From PowerShell in your updated Oracle folder run `python -m tools.upgrade_sts2mcp_beta --verify-connection` to test the API without making game actions. Start Oracle normally.
+5. For Blitz or Dread, if STS2MCP does not expose the mode, add `game:
+  mode_override: blitz` or `game:
+  mode_override: dread` to `config.yaml` (with correctly indented YAML). Leave `auto` for ordinary runs.
 
 ### Troubleshooting
 
