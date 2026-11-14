@@ -74,6 +74,8 @@ class PauseTests(unittest.TestCase):
             view.control_path = path
             view._paused = False
             view.pause_button = MagicMock()
+            view.battle_pause_button = MagicMock()
+            view._battle_paused = False
             view._set_text = MagicMock()
             view._toggle_pause()
             self.assertTrue(control.is_paused(path))

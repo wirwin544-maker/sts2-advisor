@@ -326,6 +326,7 @@ def main() -> None:
     combat_status_path = util.resolve(cfg["paths"].get("combat_status_file", "runtime/combat_status.json"))
     control_path = util.resolve(cfg['paths'].get('control_file', 'runtime/control.json'))
     was_paused = False
+    was_battle_paused = False
     current_fight = None
     combat_requests = 0
     last_combat_call = 0.0
@@ -407,18 +408,30 @@ def main() -> None:
                 # Continue collecting deck and run observations even while
                 # paused, but never request or display new recommendations.
                 deck.maybe_snapshot(state)
-                paused = control.is_paused(control_path)
+                paused, battle_paused = control.pause_flags(control_path)
                 if paused != was_paused:
-                    adv_worker.invalidate(None)  # invalidates in-flight results
+                    adv_worker.invalidate(None)  # discard any in-flight advice
                     debouncer.reset()
                     combat_debounce.reset()
                     last_state_sig = None
                     build_pending_sig = None
                     was_paused = paused
-                    logger.info('Suggestions %s.', 'paused' if paused else 'resumed')
+                    logger.info('All suggestions %s.', 'paused' if paused else 'resumed')
                     if not paused:
                         util.resolve(cfg['paths']['advice_file']).write_text(
                             'Resuming. Rechecking current state…\n', encoding='utf-8')
+                if battle_paused != was_battle_paused:
+                    # Only invalidate a live combat job. Never cancel a map,
+                    # event, shop or card selection when toggling battle pause.
+                    on_battle = (state.get('state_type') in combat.COMBAT_KINDS
+                                 and bool(state.get('battle')))
+                    if on_battle:
+                        adv_worker.invalidate(None)
+                        combat_debounce.reset()
+                        last_state_sig = None
+                    was_battle_paused = battle_paused
+                    logger.info('Battle suggestions %s.',
+                                'paused' if battle_paused else 'resumed')
                 if paused:
                     atomic_json(combat_status_path, {
                         'status': 'paused', 'run_id': journal.run_id})
@@ -556,11 +569,12 @@ def main() -> None:
                         'reference_matched': sum(f['reference'] is not None for f in found),
                         'reference_total': len(found),
                         'reference_version': reference.source_version,
-                        "status": "waiting" if not orb_verified or not can_advise else
+                        "status": "paused_battle" if battle_paused else
+                                  "waiting" if not orb_verified or not can_advise else
                                   "limit" if combat_limit else "active",
                         "remaining_requests": max(0, combat_max - combat_requests),
                     })
-                    if not orb_verified or not can_advise or combat_limit:
+                    if battle_paused or not orb_verified or not can_advise or combat_limit:
                         time.sleep(poll)
                         continue
                     combat_debounce.observe(sig)
@@ -598,6 +612,21 @@ def main() -> None:
                     time.sleep(poll)
                     continue
                 sig = signature.build(state, kind)
+                # The full map remains visible, but if STS2MCP exposes only a
+                # single reachable node there is no choice to recommend.
+                # Skip the model entirely and invalidate prior map advice.
+                automatic_map = screens.automatic_map_message(state) if kind == 'map' else None
+                if automatic_map is not None:
+                    if last_state_sig != sig:
+                        adv_worker.invalidate(None)
+                        last_state_sig = sig
+                        debouncer.reset()
+                        util.resolve(cfg['paths']['advice_file']).write_text(
+                            automatic_map + '\n', encoding='utf-8')
+                        logger.info('Map has %d available route(s); skipping model advice.',
+                                    len((state.get('map') or {}).get('next_options') or []))
+                    time.sleep(poll)
+                    continue
                 if last_state_sig != sig:
                     adv_worker.invalidate(sig)
                     last_state_sig = sig

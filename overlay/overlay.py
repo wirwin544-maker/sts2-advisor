@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from bridge import usage, build_catalog
+from bridge.run_memory import atomic_json
 
 
 def _resolve(p: str) -> Path:
@@ -42,10 +43,8 @@ def read_json(path: Path) -> dict:
 
 
 def write_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(json.dumps(value, indent=2), encoding='utf-8')
-    os.replace(tmp, path)
+    # Unique temporary paths and retry handling matter on OneDrive Desktop.
+    atomic_json(path, value)
 
 
 def work_area(root: tk.Tk) -> tuple[int, int, int, int]:
@@ -94,7 +93,7 @@ def work_area(root: tk.Tk) -> tuple[int, int, int, int]:
 
 
 def format_combat(status: dict, plan: dict) -> str:
-    if status.get('status') not in ('active', 'waiting', 'limit'):
+    if status.get('status') not in ('active', 'waiting', 'limit', 'paused_battle'):
         return ''
     mode_name = str(status.get('game_mode', '') or '').upper()
     mode_label = f"  MODE {mode_name}" if mode_name not in ('', 'UNKNOWN') else ''
@@ -131,6 +130,8 @@ def format_combat(status: dict, plan: dict) -> str:
                  f"(sheet {status.get('reference_version', '?')})\n")
     if status.get('selection'):
         head += '\nSELECTION: ' + str(status['selection']) + '\n'
+    if status.get('status') == 'paused_battle':
+        return head + '\nBATTLE SUGGESTIONS PAUSED. Non-combat advice remains enabled.'
     if status.get('status') == 'waiting':
         if not orb_verified:
             return head + '\nCombat advice paused while orb changes are verified.'
@@ -218,9 +219,15 @@ class Overlay:
         title = tk.Label(bar, text='  SPIRE ORACLE  |  RUN COACH', bg='#1d2230',
                          fg='#7fd1ff', font=(oc['font_family'], 10, 'bold'))
         title.pack(side='left')
-        self.pause_button = tk.Button(bar, text='Pause', command=self._toggle_pause,
-                  bg='#755321', fg='white', bd=0, padx=9)
-        self.pause_button.pack(side='right', padx=5, pady=3)
+        pausebar = tk.Frame(self.root, bg='#1d2230')
+        pausebar.pack(fill='x', side='top')
+        self.pause_button = tk.Button(pausebar, text='Pause All', command=self._toggle_pause,
+                  bg='#755321', fg='white', bd=0, padx=10)
+        self.pause_button.pack(side='left', padx=(8, 5), pady=(0, 4))
+        self.battle_pause_button = tk.Button(
+            pausebar, text='Pause Battle', command=self._toggle_battle_pause,
+            bg='#755321', fg='white', bd=0, padx=10)
+        self.battle_pause_button.pack(side='left', padx=5, pady=(0, 4))
         tk.Button(bar, text='Usage', command=self._open_usage_page, bg='#263b51',
                   fg='white', bd=0).pack(side='right', padx=5, pady=3)
         tk.Button(bar, text='Build', command=self._build_picker, bg='#263b51',
@@ -251,7 +258,9 @@ class Overlay:
         self.text.pack(fill='both', expand=True)
         scroll.config(command=self.text.yview)
         self._set_text('Waiting for Slay the Spire 2 + STS2MCP…')
-        self._paused = read_json(self.control_path).get('paused') is True
+        initial_controls = read_json(self.control_path)
+        self._paused = initial_controls.get('paused') is True
+        self._battle_paused = initial_controls.get('battle_paused') is True
         self._last_content = ''
         self._visible = True
         self._ever_seen = False
@@ -288,19 +297,34 @@ class Overlay:
         self.usage_label.configure(text=message)
 
     def _toggle_pause(self):
-        # A file shared with the bridge is the source of truth. Atomic replace
-        # ensures the polling bridge never reads a half-written JSON file.
-        self._paused = not self._paused
-        write_json(self.control_path, {
-            'paused': self._paused, 'updated_at': time.time()})
+        self._change_pause('paused')
+
+    def _toggle_battle_pause(self):
+        self._change_pause('battle_paused')
+
+    def _change_pause(self, field: str):
+        # Preserve the other independent pause flag when changing one button.
+        controls = read_json(self.control_path)
+        controls[field] = not (controls.get(field) is True)
+        controls['updated_at'] = time.time()
+        write_json(self.control_path, controls)
+        self._paused = controls.get('paused') is True
+        self._battle_paused = controls.get('battle_paused') is True
         self._sync_pause_button()
         if self._paused:
-            self._set_text('SUGGESTIONS PAUSED\n\nNo new Claude requests will be sent.\nClick Resume to refresh advice.')
+            self._set_text('ALL SUGGESTIONS PAUSED\n\nNo Claude model requests will be sent.\n'
+                           'Game tracking continues. Click Resume All to resume.')
+        elif self._battle_paused:
+            self._set_text('BATTLE SUGGESTIONS PAUSED\n\n'
+                           'Map, reward, shop and event advice remain enabled.')
 
     def _sync_pause_button(self):
         self.pause_button.configure(
-            text='Resume' if self._paused else 'Pause',
+            text='Resume All' if self._paused else 'Pause All',
             bg='#2a6949' if self._paused else '#755321')
+        self.battle_pause_button.configure(
+            text='Resume Battle' if self._battle_paused else 'Pause Battle',
+            bg='#2a6949' if self._battle_paused else '#755321')
 
     def _start_move(self, e):
         self._drag = (e.x_root - self.root.winfo_x(), e.y_root - self.root.winfo_y())
@@ -590,9 +614,12 @@ class Overlay:
         redraw()
 
     def _tick(self):
-        disk_pause = read_json(self.control_path).get('paused') is True
-        if disk_pause != self._paused:
+        controls = read_json(self.control_path)
+        disk_pause = controls.get('paused') is True
+        disk_battle_pause = controls.get('battle_paused') is True
+        if disk_pause != self._paused or disk_battle_pause != self._battle_paused:
             self._paused = disk_pause
+            self._battle_paused = disk_battle_pause
             self._sync_pause_button()
         fresh = self._heartbeat_fresh()
         if fresh:
@@ -623,7 +650,7 @@ class Overlay:
                 self._shown_build_runs.add(run_id)
                 self.root.after(100, self._build_picker)
             status = read_json(self.combat_status_path)
-            if (status.get('status') in ('active', 'waiting', 'limit') and
+            if (status.get('status') in ('active', 'waiting', 'limit', 'paused_battle') and
                     status.get('run_id') == run_id):
                 content = format_combat(status, read_json(self.combat_plan_path))
             else:
@@ -641,9 +668,9 @@ class Overlay:
             self._usage_last_check = time.monotonic()
             self._update_usage_label()
         if self._paused:
-            content = ('SUGGESTIONS PAUSED\n\n'
+            content = ('ALL SUGGESTIONS PAUSED\n\n'
                        'Game tracking continues. Claude recommendations and model calls '
-                       'are suspended.\nClick Resume to refresh the current decision.')
+                       'are suspended.\nClick Resume All to refresh the current decision.')
         if content != self._last_content:
             self._set_text(content)
             self._last_content = content
