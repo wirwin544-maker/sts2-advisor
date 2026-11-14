@@ -74,6 +74,11 @@ ACTIONS = '''    private static Dictionary<string, object?> ExecuteShopPurchase(
 '''
 
 class RemovedGameApis(unittest.TestCase):
+    def test_generated_helper_imports_nmerchantroom_namespace(self):
+        # CS0103 in McpMod.OracleBetaCompat.cs: NMerchantRoom lives in Nodes.Rooms.
+        self.assertIn('using MegaCrit.Sts2.Core.Nodes.Rooms;', HELPER)
+        self.assertIn('NMerchantRoom.Instance', HELPER)
+
     def test_exact_seven_compilation_errors_avoided(self):
         s, a, stats = patch_all(STATE, ACTIONS)
         self.assertNotIn('merchantRoom.GetLocalInventory()', s+a)

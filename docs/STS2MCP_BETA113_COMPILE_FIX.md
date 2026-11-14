@@ -48,3 +48,7 @@ python -m unittest discover -s tests -v
 ```
 
 This tests source transformation and backup/restore logic, not the game's binary API. Successful compile and a live API call are required for confirmation.
+
+
+### CS0103 follow-up: missing `NMerchantRoom` import
+The generated `McpMod.OracleBetaCompat.cs` referenced `NMerchantRoom.Instance` without importing its namespace. The generator now includes `using MegaCrit.Sts2.Core.Nodes.Rooms;`. This is a compile-time namespace fix, not a newly removed game API. Run the corrected beta rebuild after closing the game; its backup logic preserves the previously installed DLL if compilation fails. The actual beta DLL remains unverified until built locally.
