@@ -24,7 +24,7 @@ The installer copies four Python source files and two test files, backs up repla
 
 ## Check
 
-`python -m unittest tests.test_pause_and_map -v`
+`python -m unittest discover -s tests -p test_pause_and_map.py -v`
 
 Verify that `Pause Battle` allows a map with two choices to receive advice, but suppresses combat recommendations. With `Pause All`, both remain suppressed. With only one reachable map route, Oracle should show the forced route and no `Firing advice: map` log event for that decision.
 
